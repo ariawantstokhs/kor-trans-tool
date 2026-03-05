@@ -2,31 +2,27 @@ import React, { useState, useRef, useEffect, useCallback } from "react";
 import { TranslationTool } from "./TranslationTool";
 import { createEngine, deriveLevelFromSurvey, ProficiencyLevel, ProficiencyEngine } from "./proficiencyEngine";
 
-type StepId = 1 | 2 | 3 | 4;
+type StepId = 1 | 2;
 
-const koreanStudyDurations = ["Never studied", "< 6 months", "6–12 months", "1-3 years", "3+ years"] as const;
-type StudyDuration = (typeof koreanStudyDurations)[number];
+const readingOptions = [
+  { label: "I can't read Korean, or only recognize a few words", level: "low" as const },
+  { label: "I can read Korean but often need help understanding", level: "low" as const },
+  { label: "I can read and mostly understand everyday Korean text", level: "mid" as const },
+  { label: "I can read most Korean texts, though formal writing is sometimes difficult", level: "mid" as const },
+];
 
-const koreanGoalOptions = [
-  "Travel", "K-dramas/Music", "Work", "Heritage", "Friends/Family", "Academic", "Other"
-] as const;
-type GoalOption = (typeof koreanGoalOptions)[number];
-
-const selfRatingScale = Array.from({ length: 10 }, (_, i) => i + 1);
+const topikLevels = [1, 2, 3, 4, 5, 6] as const;
 
 const stepsMeta: { id: StepId; title: string; subtitle: string }[] = [
-  { id: 1, title: "About you", subtitle: "A little background to get started" },
-  { id: 2, title: "Korean background", subtitle: "Your experience and confidence level" },
-  { id: 3, title: "Your goals", subtitle: "Why are you learning Korean?" },
-  { id: 4, title: "Ready!", subtitle: "We'll set up your personalised tool" },
+  { id: 1, title: "Korean level", subtitle: "A quick check on your proficiency" },
+  { id: 2, title: "Ready!", subtitle: "We'll set up your personalised tool" },
 ];
 
 export const App: React.FC = () => {
   const [currentStep, setCurrentStep] = useState<StepId>(1);
-  const [name, setName] = useState("");
-  const [studyDuration, setStudyDuration] = useState<StudyDuration | "">("");
-  const [selfRating, setSelfRating] = useState<number>(5);
-  const [selectedGoals, setSelectedGoals] = useState<Set<GoalOption>>(new Set());
+  const [hasTopik, setHasTopik] = useState<boolean | null>(null);
+  const [topikLevel, setTopikLevel] = useState<number | null>(null);
+  const [readingChoice, setReadingChoice] = useState<number | null>(null);
   const [engine, setEngine] = useState<ProficiencyEngine | null>(null);
 
   const stepsListRef = useRef<HTMLOListElement>(null);
@@ -58,23 +54,11 @@ export const App: React.FC = () => {
     return () => window.removeEventListener("resize", updateProgress);
   }, [updateProgress]);
 
-  const toggleGoal = (label: GoalOption) => {
-    setSelectedGoals((prev) => {
-      const next = new Set(prev);
-      next.has(label) ? next.delete(label) : next.add(label);
-      return next;
-    });
-  };
-
   const goNext = () => {
-    if (currentStep < 4) {
-      setCurrentStep((prev) => (prev + 1) as StepId);
+    if (currentStep === 1) {
+      setCurrentStep(2);
     } else {
-      const surveyData = {
-        studyDuration: studyDuration || undefined,
-        selfRating,
-        goals: Array.from(selectedGoals),
-      };
+      const surveyData = { hasTopik, topikLevel, readingChoice };
       const level = deriveLevelFromSurvey(surveyData);
       setEngine(createEngine(level, surveyData));
     }
@@ -83,6 +67,9 @@ export const App: React.FC = () => {
   const goBack = () => {
     setCurrentStep((prev) => (prev > 1 ? (prev - 1) as StepId : prev));
   };
+
+  // Can the user proceed from step 1?
+  const canProceedStep1 = hasTopik === true ? topikLevel !== null : hasTopik === false ? readingChoice !== null : false;
 
   const handleChangeLevel = (level: ProficiencyLevel) => {
     if (!engine) return;
@@ -99,117 +86,79 @@ export const App: React.FC = () => {
         <section className="question-section">
           <header className="question-header">
             <div className="question-meta"><span className="question-number">01</span></div>
-            <h2>What should we call you?</h2>
+            <h2>Do you have a TOPIK score?</h2>
           </header>
-          <input
-            type="text"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="Your name..."
-            style={{
-              width: "100%", padding: "12px 16px", borderRadius: 12,
-              border: "1px solid #e4d5c9", fontSize: 16, fontFamily: "inherit",
-              color: "#2b1a11", background: "#fdf7f1", outline: "none", marginTop: 8,
-            }}
-          />
-          <p className="paragraph" style={{ marginTop: 20 }}>
-            This tool adapts to your Korean proficiency level to give you exactly the right level of help — not too much, not too little.
-          </p>
+
+          <div style={{ display: "flex", gap: 10, marginBottom: 24 }}>
+            <button
+              className={"scale-pill" + (hasTopik === true ? " scale-pill--active" : "")}
+              onClick={() => { setHasTopik(true); setReadingChoice(null); }}
+              style={{ padding: "8px 28px", minWidth: "auto" }}
+            >
+              Yes
+            </button>
+            <button
+              className={"scale-pill" + (hasTopik === false ? " scale-pill--active" : "")}
+              onClick={() => { setHasTopik(false); setTopikLevel(null); }}
+              style={{ padding: "8px 28px", minWidth: "auto" }}
+            >
+              No
+            </button>
+          </div>
+
+          {hasTopik === true && (
+            <>
+              <p className="paragraph" style={{ marginBottom: 8 }}>
+                What level?
+              </p>
+              <div style={{ display: "flex", gap: 10 }}>
+                {topikLevels.map((lvl) => (
+                  <button
+                    key={lvl}
+                    className={"scale-pill" + (topikLevel === lvl ? " scale-pill--active" : "")}
+                    onClick={() => setTopikLevel(lvl)}
+                  >
+                    {lvl}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+
+          {hasTopik === false && (
+            <>
+              <p className="paragraph" style={{ marginBottom: 8 }}>
+                How well can you read Korean?
+              </p>
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {readingOptions.map((opt, idx) => (
+                  <button
+                    key={idx}
+                    className={"scale-pill" + (readingChoice === idx ? " scale-pill--active" : "")}
+                    onClick={() => setReadingChoice(idx)}
+                    style={{ padding: "10px 18px", minWidth: "auto", textAlign: "left" }}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
         </section>
       );
     }
 
-    if (currentStep === 2) {
-      return (
-        <section className="question-section">
-          <header className="question-header">
-            <div className="question-meta"><span className="question-number">02</span></div>
-            <h2>Tell us about your Korean background.</h2>
-          </header>
-    
-          <p className="paragraph" style={{ marginBottom: 8 }}>
-          <span className="question-number" style={{ marginRight: 10, background: "#ffb76b", borderColor: "#ffb76b", color: "#fff" }}>A</span>
-            How long have you been studying?
-          </p>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 28 }}>
-            {koreanStudyDurations.map((d) => (
-              <button
-                key={d}
-                className={"scale-pill" + (studyDuration === d ? " scale-pill--active" : "")}
-                onClick={() => setStudyDuration(d)}
-                style={{ padding: "8px 18px", minWidth: "auto" }}
-              >
-                {d}
-              </button>
-            ))}
-          </div>
-    
-          <p className="paragraph" style={{ marginBottom: 8 }}>
-            <span className="question-number" style={{ marginRight: 10, background: "#ffb76b", borderColor: "#ffb76b", color: "#fff" }}>B</span>
-            How confident are you reading Korean? &nbsp;·&nbsp; 1 = can't read Hangul &nbsp;·&nbsp; 10 = fluent
-          </p>
-          <div className="scale-row">
-            {selfRatingScale.map((value) => (
-              <button
-                key={value}
-                className={"scale-pill" + (value === selfRating ? " scale-pill--active" : "")}
-                onClick={() => setSelfRating(value)}
-              >
-                {value}
-              </button>
-            ))}
-          </div>
-        </section>
-      );
-    }
-
-    if (currentStep === 3) {
-      return (
-        <section className="question-section">
-          <header className="question-header">
-            <div className="question-meta"><span className="question-number">04</span></div>
-            <h2>Why are you learning Korean?</h2>
-          </header>
-          <div className="grid" style={{ marginTop: 16 }}>
-            {koreanGoalOptions.map((label) => {
-              const active = selectedGoals.has(label);
-              return (
-                <button
-                  key={label}
-                  className={"grid-item" + (active ? " grid-item--active" : "")}
-                  onClick={() => toggleGoal(label)}
-                >
-                  <span className="grid-label">{label}</span>
-                  {active && <span className="grid-check" />}
-                </button>
-              );
-            })}
-          </div>
-        </section>
-      );
-    }
-
-    const previewLevel = deriveLevelFromSurvey({ studyDuration: studyDuration || undefined, selfRating });
-    const levelColors: Record<string, string> = { low: "#ff8a5c", mid: "#ffb76b", high: "#4a7c59" };
     return (
       <section className="question-section">
         <header className="question-header">
-          <div className="question-meta"><span className="question-number">05</span></div>
-          <h2>{name ? `You're all set, ${name}!` : "You're all set!"}</h2>
+          <div className="question-meta"><span className="question-number">02</span></div>
+          <h2>You're all set!</h2>
         </header>
-        <p className="paragraph">Based on your answers, we've set your starting proficiency level to:</p>
-        <div style={{
-          display: "inline-flex", alignItems: "center", gap: 12, marginTop: 8,
-          background: levelColors[previewLevel] + "18", border: `2px solid ${levelColors[previewLevel]}44`,
-          borderRadius: 16, padding: "14px 24px"
-        }}>
-          <span style={{ width: 12, height: 12, borderRadius: "50%", background: levelColors[previewLevel] }} />
-          <span style={{ fontSize: 22, fontWeight: 700, color: levelColors[previewLevel], textTransform: "capitalize" }}>
-            {previewLevel} proficiency
-          </span>
-        </div>
-        <p className="paragraph" style={{ marginTop: 20 }}>
-          You can always switch levels with the dev toggle while testing. Hit "Launch" to open the translation tool.
+        <p className="paragraph">
+          Based on your answers, we'll tailor the translation tools to match your comfort level with Korean.
+        </p>
+        <p className="paragraph" style={{ marginTop: 12 }}>
+          Hit "Launch" to open TransLucent.
         </p>
       </section>
     );
@@ -219,13 +168,9 @@ export const App: React.FC = () => {
     <div className="app-root">
       <div className="card">
         <aside className="sidebar">
-          {/* <div className="brand">
-            <div className="brand-mark" />
-            <span className="brand-name">KoreanBridge</span>
-          </div> */}
           <div className="sidebar-heading">
-            <h1>Let's set up your Korean tool</h1>
-            <p>Answer a few quick questions so we can tailor the experience to your level.</p>
+            <h1>Let's set up TransLucent</h1>
+            <p>Answer a quick question so we can tailor the experience to your level.</p>
           </div>
           <ol
             ref={stepsListRef}
@@ -256,8 +201,12 @@ export const App: React.FC = () => {
             <button className="ghost-button" onClick={goBack} disabled={currentStep === 1}>
               <span className="arrow arrow-left" /> Back
             </button>
-            <button className="primary-button" onClick={goNext}>
-              {currentStep === 4 ? "Launch tool" : "Next"} <span className="arrow arrow-right" />
+            <button
+              className="primary-button"
+              onClick={goNext}
+              disabled={currentStep === 1 && !canProceedStep1}
+            >
+              {currentStep === 2 ? "Launch tool" : "Next"} <span className="arrow arrow-right" />
             </button>
           </footer>
         </main>

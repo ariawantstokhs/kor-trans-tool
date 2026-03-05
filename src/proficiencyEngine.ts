@@ -1,44 +1,37 @@
 // ─── Proficiency Engine ────────────────────────────────────────────────────
 // Stores the user's proficiency level and derives which features are active.
-// "Partial" means the feature is shown but in a reduced/collapsed form.
+// Two-level system: low (cannot read Korean) and mid (partially understands Korean)
 
-export type ProficiencyLevel = "low" | "mid" | "high";
-export type FeatureState = "on" | "partial" | "off";
+export type ProficiencyLevel = "low" | "mid";
+export type FeatureMode = "proactive" | "on-demand" | "off";
 
 export interface FeatureFlags {
-  culturalContext: FeatureState;   // F3
-  onDemandExplore: FeatureState;  // F4
-  alternatives: FeatureState;     // F5
+  situationBriefing: FeatureMode;   // Cultural/communicative norms
+  backTranslation: FeatureMode;     // English back-translation
+  contextualExploration: FeatureMode; // 3-layer drill-down (meaning → alternatives → patterns)
 }
 
-// Feature matrix derived from the design table
+// Feature matrix (2 × 3) from the README spec
 const FEATURE_MATRIX: Record<ProficiencyLevel, FeatureFlags> = {
   low: {
-    culturalContext: "on",
-    onDemandExplore: "off",
-    alternatives: "off",
+    situationBriefing: "proactive",      // Always visible in English
+    backTranslation: "proactive",        // Always visible, full sentence-by-sentence
+    contextualExploration: "off",        // Not available — user can't read Korean
   },
   mid: {
-    culturalContext: "on",
-    onDemandExplore: "on",
-    alternatives: "on",
-  },
-  high: {
-    culturalContext: "partial",
-    onDemandExplore: "on",
-    alternatives: "partial",
+    situationBriefing: "on-demand",      // Tap to see context for a segment
+    backTranslation: "on-demand",        // Tap uncertain segments to reveal
+    contextualExploration: "on-demand",  // 3-layer drill-down on any segment
   },
 };
 
 export interface ProficiencyEngine {
   level: ProficiencyLevel;
   features: FeatureFlags;
-  // Survey answers that informed the level
   surveyData: {
-    age?: string;
-    studyDuration?: string;
-    selfRating?: number;
-    goals?: string[];
+    hasTopik?: boolean | null;
+    topikLevel?: number | null;
+    readingChoice?: number | null;
   };
 }
 
@@ -58,13 +51,20 @@ export function getFeatureMatrix() {
 }
 
 // Derives a proficiency level from survey answers
-// (basic heuristic — can be replaced with LLM-based scoring later)
+// TOPIK 1-2 → low, TOPIK 3+ → mid
+// Reading choice 0-1 → low, 2-3 → mid
 export function deriveLevelFromSurvey(
   surveyData: ProficiencyEngine["surveyData"]
 ): ProficiencyLevel {
-  const { selfRating = 1, studyDuration } = surveyData;
+  const { hasTopik, topikLevel, readingChoice } = surveyData;
 
-  if (selfRating >= 7 || studyDuration === "3+ years") return "high";
-  if (selfRating >= 4 || studyDuration === "1-3 years") return "mid";
+  if (hasTopik && topikLevel != null) {
+    return topikLevel >= 3 ? "mid" : "low";
+  }
+
+  if (readingChoice != null) {
+    return readingChoice >= 2 ? "mid" : "low";
+  }
+
   return "low";
 }

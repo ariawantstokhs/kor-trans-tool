@@ -1,42 +1,58 @@
-import React, { useState, useRef, useEffect } from "react";
-import { ProficiencyEngine, ProficiencyLevel, FeatureState } from "./proficiencyEngine";
-import { getFeatureMatrix, createEngine } from "./proficiencyEngine";
+import React, { useState, useRef } from "react";
+import { ProficiencyEngine, ProficiencyLevel, FeatureMode } from "./proficiencyEngine";
 import OpenAI from "openai";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
-interface TranslationResult {
-  korean: string;
-  tokens: Token[];
-  culturalFlags: CulturalFlag[];
-  alternatives: Alternative[];
-}
 
-interface Token {
-  id: string;
+
+interface TokenData {
   text: string;
-  hasExploration: boolean;
+  romanization: string;
+  meaning: string;
+  pos: string;
 }
 
-interface CulturalFlag {
-  id: string;
-  title: string;
-  detail: string;
-  severity: "note" | "caution";
-}
-
-interface Alternative {
+interface SentenceSegment {
   korean: string;
-  formality: "formal" | "neutral" | "casual";
-  nuance: string;
+  backTranslation: string;
+  tokens: TokenData[];
+}
+
+interface BriefingNorm {
+  category: string;
+  description: string;
+  segmentIndices: number[];
+}
+
+interface SituationBriefing {
+  summary: string;
+  norms: BriefingNorm[];
+}
+
+interface TranslationResult {
+  koreanTranslation: string;
+  segments: SentenceSegment[];
+  situationBriefing: SituationBriefing;
+}
+
+interface AlternativeExpression {
+  korean: string;
+  english: string;
+  formality: "more formal" | "similar" | "more casual";
+  nuanceDiff: string;
+}
+
+interface ReusablePattern {
+  pattern: string;
+  description: string;
+  examples: string[];
 }
 
 interface ExplorationResult {
-  word: string;
-  romanization: string;
-  meaning: string;
-  usageContext: string;
-  grammarNote: string;
+  alternatives: AlternativeExpression[];
+  grammarPatterns: ReusablePattern[];
+  culturalContext: string;
 }
 
 interface TranslationToolProps {
@@ -46,409 +62,594 @@ interface TranslationToolProps {
 
 // ─── API ────────────────────────────────────────────────────────────
 
-const openai = new OpenAI({
-  apiKey: (import.meta as any).env.VITE_OPENAI_API_KEY as string,
-  dangerouslyAllowBrowser: true,
-});
+let _openai: OpenAI | null = null;
+function getOpenAI(): OpenAI {
+  if (!_openai) {
+    _openai = new OpenAI({
+      apiKey: (import.meta as any).env.VITE_OPEN_AI_KEY as string,
+      dangerouslyAllowBrowser: true,
+    });
+  }
+  return _openai;
+}
 
 async function callOpenAI(systemPrompt: string, userMessage: string): Promise<string> {
-  const response = await openai.chat.completions.create({
-    model: "gpt-4o-mini", 
+  const response = await getOpenAI().chat.completions.create({
+    model: "gpt-5-mini-2025-08-07",
     messages: [
       { role: "system", content: systemPrompt },
       { role: "user", content: userMessage },
     ],
-    max_tokens: 1000,
-    temperature: 0.2,
+    max_completion_tokens: 16000,
   });
-
   return response.choices[0]?.message?.content ?? "";
 }
 
+// ── Call 1: Translation + Base Data ──
 
 async function translateText(
   text: string,
-  features: ProficiencyEngine["features"]
+  level: ProficiencyLevel
 ): Promise<TranslationResult> {
-  const wantCultural = features.culturalContext !== "off";
-  const wantAlternatives = features.alternatives !== "off";
+  const contextLine = "Infer the recipient type and formality from the text content.";
 
-  const systemPrompt = `You are a Korean translation assistant. 
-Respond ONLY with valid JSON matching this exact shape:
+  const systemPrompt = `You are a Korean translation assistant specializing in professional emails.
+${contextLine}
+The user's Korean proficiency level is: ${level}.
+
+Respond ONLY with valid JSON matching this shape:
 {
-  "korean": "<translated Korean text>",
-  "tokens": [{ "id": "t1", "text": "<word or particle>", "hasExploration": true }],
-  "culturalFlags": ${wantCultural ? '[{ "id": "c1", "title": "...", "detail": "...", "severity": "note" }]' : "[]"},
-  "alternatives": ${wantAlternatives ? '[{ "korean": "...", "formality": "formal|neutral|casual", "nuance": "..." }]' : "[]"}
-}
-- tokens: split the Korean output into meaningful chunks (words/particles). Mark hasExploration true for words worth exploring.
-- culturalFlags: flag genuine cultural/politeness nuances (max 3).
-- alternatives: provide 2-3 variants with different formality levels.
-- No markdown, no prose, pure JSON only.`;
-
-  const raw = await callOpenAI(systemPrompt, `Translate to Korean: "${text}"`);
-  try {
-    return JSON.parse(raw.replace(/```json|```/g, "").trim());
-  } catch {
-    return { korean: raw, tokens: [{ id: "t0", text: raw, hasExploration: false }], culturalFlags: [], alternatives: [] };
+  "korean_translation": "<full Korean email as a single string>",
+  "sentence_segments": [
+    {
+      "korean": "<one Korean sentence>",
+      "back_translation": "<English back-translation of that sentence>",
+      "tokens": [
+        {
+          "text": "<Korean word/morpheme>",
+          "romanization": "<romanization>",
+          "meaning": "<English meaning>",
+          "pos": "<part of speech>"
+        }
+      ]
+    }
+  ],
+  "situation_briefing": {
+    "summary": "<1-2 sentence overview of communicative norms for this situation>",
+    "norms": [
+      {
+        "category": "<formality|greeting|closing|honorifics|cultural>",
+        "description": "<explanation of the norm in English>",
+        "segment_indices": [0, 1]
+      }
+    ]
   }
 }
 
-async function exploreWord(word: string, sentenceContext: string): Promise<ExplorationResult> {
-  const systemPrompt = `You are a Korean language tutor. Respond ONLY with valid JSON:
-{
-  "word": "...",
-  "romanization": "...",
-  "meaning": "...",
-  "usageContext": "...",
-  "grammarNote": "..."
-}`;
-  const raw = await callOpenAI(systemPrompt, `Explain the Korean word "${word}" in this sentence: "${sentenceContext}"`);
+Rules:
+- Split the input into individual sentences. Translate each separately.
+- back_translation: translate each Korean sentence back to English independently.
+- tokens: break each Korean sentence into key words/morphemes with romanization, meaning, and part-of-speech.
+- situation_briefing: provide 3-5 norms. Each norm MUST be specific and actionable for THIS particular email — do NOT give generic advice like "use formal language" or "be polite". Instead, point out concrete choices made in the translation, e.g. "The verb ending ~드리겠습니다 in segment 2 signals deference to a superior; switching to ~하겠습니다 would be appropriate for a peer." Reference specific Korean expressions where possible. Each norm should reference which sentence indices it applies to via segment_indices.
+- Do NOT judge the translation quality. Only describe what is generally expected.
+- No markdown, no prose, pure JSON only.`;
+
+  const raw = await callOpenAI(systemPrompt, `Translate this professional email to Korean:\n"${text}"`);
   try {
-    return JSON.parse(raw.replace(/```json|```/g, "").trim());
+    const parsed = JSON.parse(raw.replace(/```json|```/g, "").trim());
+    return {
+      koreanTranslation: parsed.korean_translation || "",
+      segments: (parsed.sentence_segments || []).map((s: any) => ({
+        korean: s.korean || "",
+        backTranslation: s.back_translation || "",
+        tokens: (s.tokens || []).map((t: any) => ({
+          text: t.text || "",
+          romanization: t.romanization || "",
+          meaning: t.meaning || "",
+          pos: t.pos || "",
+        })),
+      })),
+      situationBriefing: {
+        summary: parsed.situation_briefing?.summary || "",
+        norms: (parsed.situation_briefing?.norms || []).map((n: any) => ({
+          category: n.category || "",
+          description: n.description || "",
+          segmentIndices: n.segment_indices || [],
+        })),
+      },
+    };
   } catch {
-    return { word, romanization: "", meaning: raw, usageContext: "", grammarNote: "" };
+    return {
+      koreanTranslation: raw,
+      segments: [{ korean: raw, backTranslation: "(parsing error)", tokens: [] }],
+      situationBriefing: { summary: "", norms: [] },
+    };
+  }
+}
+
+// ── Call 2: Exploration Data (Mid only, on-demand) ──
+
+async function fetchExploration(
+  koreanSegment: string,
+  fullContext: string,
+  originalEnglish: string
+): Promise<ExplorationResult> {
+  const systemPrompt = `You are a Korean language tutor. The user has tapped a segment of a Korean translation to learn more.
+Respond ONLY with valid JSON:
+{
+  "alternatives": [
+    {
+      "korean": "<alternative Korean expression>",
+      "english": "<English translation>",
+      "formality": "more formal|similar|more casual",
+      "nuance_diff": "<how this differs in nuance/tone>"
+    }
+  ],
+  "grammar_patterns": [
+    {
+      "pattern": "<reusable grammar pattern, e.g. ~(으)시다>",
+      "description": "<when to use this pattern>",
+      "examples": ["<example 1>", "<example 2>"]
+    }
+  ],
+  "cultural_context": "<1-2 sentences about cultural/social norms relevant to this specific segment>"
+}
+
+Rules:
+- alternatives: 2-3 alternative ways to express the same idea with different formality/nuance. Present as OPTIONS, not corrections.
+- grammar_patterns: 1-2 reusable grammar patterns from this expression with examples.
+- cultural_context: segment-specific cultural norm (formality, honorifics, social appropriateness).
+- Use the original English and communicative context as background to inform your analysis, but keep explanations focused on the Korean segment.
+- All explanations in English. No markdown, pure JSON only.`;
+
+  const raw = await callOpenAI(
+    systemPrompt,
+    `Explain this Korean segment: "${koreanSegment}"\nFull sentence context: "${fullContext}"\nOriginal English context: "${originalEnglish}"`
+  );
+  try {
+    const parsed = JSON.parse(raw.replace(/```json|```/g, "").trim());
+    return {
+      alternatives: (parsed.alternatives || []).map((a: any) => ({
+        korean: a.korean || "",
+        english: a.english || "",
+        formality: a.formality || "similar",
+        nuanceDiff: a.nuance_diff || "",
+      })),
+      grammarPatterns: (parsed.grammar_patterns || []).map((p: any) => ({
+        pattern: p.pattern || "",
+        description: p.description || "",
+        examples: p.examples || [],
+      })),
+      culturalContext: parsed.cultural_context || "",
+    };
+  } catch {
+    return { alternatives: [], grammarPatterns: [], culturalContext: raw };
   }
 }
 
 // ─── Sub-components ─────────────────────────────────────────────────────────
 
-const FormalityBadge = ({ formality }: { formality: Alternative["formality"] }) => {
-  const colors: Record<string, string> = {
-    formal: "#4a7c59",
-    neutral: "#7c6a4a",
-    casual: "#7c4a5e",
+const ModeBadge = ({ mode }: { mode: FeatureMode }) => {
+  const config = {
+    proactive: { color: "#4a7c59", label: "ALWAYS ON" },
+    "on-demand": { color: "#b07c2a", label: "ON-DEMAND" },
+    off: { color: "#888", label: "OFF" },
   };
+  const { color, label } = config[mode];
   return (
     <span style={{
-      fontSize: 10, fontWeight: 700, letterSpacing: "0.08em",
-      textTransform: "uppercase", padding: "2px 8px", borderRadius: 999,
-      background: colors[formality] + "22", color: colors[formality], border: `1px solid ${colors[formality]}44`
+      display: "inline-flex", alignItems: "center", gap: 5,
+      fontSize: 10, color, padding: "2px 8px",
+      borderRadius: 999, background: color + "15",
+      border: `1px solid ${color}30`, fontWeight: 700,
+      letterSpacing: "0.06em",
     }}>
-      {formality}
+      <span style={{ width: 5, height: 5, borderRadius: "50%", background: color }} />
+      {label}
     </span>
   );
 };
 
-const FeaturePill = ({ state, label }: { state: FeatureState; label: string }) => {
-  const colors = { on: "#4a7c59", partial: "#b07c2a", off: "#888" };
+const CategoryLabel = ({ category }: { category: string }) => {
+  const colors: Record<string, string> = {
+    formality: "#6366f1",
+    honorifics: "#8b5cf6",
+    structure: "#2563eb",
+    cultural: "#d97706",
+    greeting: "#059669",
+    closing: "#0891b2",
+  };
+  const color = colors[category] || "#7b6a5c";
   return (
     <span style={{
-      display: "inline-flex", alignItems: "center", gap: 5,
-      fontSize: 11, color: colors[state], padding: "3px 10px",
-      borderRadius: 999, background: colors[state] + "18",
-      border: `1px solid ${colors[state]}33`, fontWeight: 600
+      fontSize: 9,
+      fontWeight: 700,
+      letterSpacing: "0.08em",
+      textTransform: "uppercase" as const,
+      color,
+      background: color + "12",
+      padding: "2px 7px",
+      borderRadius: 4,
     }}>
-      <span style={{ width: 6, height: 6, borderRadius: "50%", background: colors[state] }} />
-      {label}: {state.toUpperCase()}
+      {category}
     </span>
   );
 };
+
+
 
 // ─── Main Component ──────────────────────────────────────────────────────────
 
 export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChangeLevel }) => {
   const [inputText, setInputText] = useState("");
   const [result, setResult] = useState<TranslationResult | null>(null);
+  const [segments, setSegments] = useState<SentenceSegment[]>([]);
   const [loading, setLoading] = useState(false);
+
+  // Mid mode state
+  const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
   const [exploration, setExploration] = useState<ExplorationResult | null>(null);
-  const [exploringWord, setExploringWord] = useState<string | null>(null);
   const [explorationLoading, setExplorationLoading] = useState(false);
-  const [selectedAlt, setSelectedAlt] = useState<number | null>(null);
+  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set());
+
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { features, level } = engine;
+
+  // ── Handlers ──
 
   const handleTranslate = async () => {
     if (!inputText.trim()) return;
     setLoading(true);
     setResult(null);
+    setSegments([]);
+    setSelectedIdx(null);
     setExploration(null);
-    setExploringWord(null);
-    setSelectedAlt(null);
+    setExpandedSections(new Set());
     try {
-      const res = await translateText(inputText, features);
+      const res = await translateText(inputText, level);
       setResult(res);
+      setSegments([...res.segments]);
     } finally {
       setLoading(false);
     }
   };
 
-  const handleWordTap = async (token: Token) => {
-    if (features.onDemandExplore === "off" || !token.hasExploration || !result) return;
-    setExploringWord(token.text);
-    setExplorationLoading(true);
+  const handleSegmentTap = async (idx: number) => {
+    if (level === "low") return; // No interactivity in low mode
+    setSelectedIdx(idx);
     setExploration(null);
+    setExpandedSections(new Set());
+  };
+
+  const handleFetchExploration = async () => {
+    if (selectedIdx === null || !result) return;
+    const seg = segments[selectedIdx];
+    setExplorationLoading(true);
     try {
-      const res = await exploreWord(token.text, result.korean);
+      const res = await fetchExploration(
+        seg.korean,
+        segments.map((s) => s.korean).join(" "),
+        inputText
+      );
       setExploration(res);
     } finally {
       setExplorationLoading(false);
     }
   };
 
-  const levels: ProficiencyLevel[] = ["low", "mid", "high"];
+  const toggleSection = (section: string) => {
+    setExpandedSections((prev) => {
+      const next = new Set(prev);
+      if (next.has(section)) {
+        next.delete(section);
+      } else {
+        next.add(section);
+        // Fetch exploration data on first expand if not loaded
+        if (!exploration && !explorationLoading) {
+          handleFetchExploration();
+        }
+      }
+      return next;
+    });
+  };
+
+  const handleReplaceSegment = (altKorean: string) => {
+    if (selectedIdx === null) return;
+    setSegments((prev) => {
+      const next = [...prev];
+      next[selectedIdx] = { ...next[selectedIdx], korean: altKorean };
+      return next;
+    });
+  };
+
+  const levels: ProficiencyLevel[] = ["low", "mid"];
+
+  // ── Render ──
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100vh", background: "#f5efe8", fontFamily: "'Georgia', serif" }}>
-
+    <div className="tl-root">
       {/* ── Top bar ── */}
-      <header style={{
-        display: "flex", alignItems: "center", justifyContent: "space-between",
-        padding: "14px 28px", background: "#fff", borderBottom: "1px solid #e8ddd4",
-        boxShadow: "0 1px 8px rgba(0,0,0,0.06)"
-      }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <div style={{ width: 32, height: 32, borderRadius: 10, background: "linear-gradient(135deg, #ffb76b, #ff7f50)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-            <span style={{ fontSize: 16 }}>한</span>
+      <header className="tl-header">
+        <div className="tl-brand">
+          <div className="tl-brand-mark">
+            <span>TL</span>
           </div>
-          <span style={{ fontWeight: 700, fontSize: 17, color: "#2b1a11", letterSpacing: "-0.01em" }}>KoreanBridge</span>
+          <span className="tl-brand-name">TransLucent</span>
         </div>
 
         {/* Dev toggle */}
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ fontSize: 11, color: "#999", fontFamily: "monospace", background: "#f0e8e0", padding: "2px 8px", borderRadius: 4 }}>DEV</span>
+        <div className="tl-dev-toggle">
+          <span className="tl-dev-label">DEV</span>
           {levels.map((l) => (
-            <button key={l} onClick={() => onChangeLevel(l)} style={{
-              padding: "5px 14px", borderRadius: 999, fontSize: 12, fontWeight: 700,
-              fontFamily: "'Georgia', serif", cursor: "pointer", border: "none",
-              background: level === l ? "#2b1a11" : "#f0e8e0",
-              color: level === l ? "#fff" : "#7b6a5c",
-              transition: "all 0.15s ease"
-            }}>
+            <button
+              key={l}
+              onClick={() => onChangeLevel(l)}
+              className={`tl-level-btn ${level === l ? "tl-level-btn--active" : ""}`}
+            >
               {l.charAt(0).toUpperCase() + l.slice(1)}
             </button>
           ))}
-          <span style={{ fontSize: 12, color: "#b29b87", marginLeft: 4 }}>proficiency</span>
+          <span className="tl-dev-suffix">proficiency</span>
         </div>
 
-        {/* Active features */}
-        <div style={{ display: "flex", gap: 6 }}>
-          <FeaturePill state={features.culturalContext} label="F3" />
-          <FeaturePill state={features.onDemandExplore} label="F4" />
-          <FeaturePill state={features.alternatives} label="F5" />
-        </div>
+
       </header>
 
-      {/* ── Split panel ── */}
-      <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
+      {/* ── Content ── */}
+      <div className={`tl-content tl-content--split`}>
 
-        {/* Left: Input + Output */}
-        <div style={{ flex: 1, display: "flex", flexDirection: "column", padding: 28, gap: 20, overflowY: "auto", borderRight: "1px solid #e8ddd4" }}>
+        {/* ── Input area (shared) ── */}
+        <div className="tl-left">
+          <div className="tl-card">
+            <label className="tl-label">English Input</label>
 
-          {/* Input */}
-          <div style={{ background: "#fff", borderRadius: 20, padding: 24, boxShadow: "0 2px 12px rgba(0,0,0,0.07)" }}>
-            <label style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "#b29b87", display: "block", marginBottom: 10 }}>
-              English Input
-            </label>
+
             <textarea
               ref={textareaRef}
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter" && e.metaKey) handleTranslate(); }}
-              placeholder="Type something to translate..."
+              onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handleTranslate(); }}
+              placeholder="Type a professional email to translate…"
               rows={4}
-              style={{
-                width: "100%", border: "none", outline: "none", resize: "none",
-                fontSize: 16, lineHeight: 1.6, color: "#2b1a11", fontFamily: "'Georgia', serif",
-                background: "transparent"
-              }}
+              className="tl-textarea"
             />
-            <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 12 }}>
-              <button onClick={handleTranslate} disabled={loading || !inputText.trim()} style={{
-                background: loading ? "#ccc" : "#2b1a11", color: "#fff",
-                border: "none", borderRadius: 999, padding: "10px 24px",
-                fontSize: 14, fontWeight: 600, cursor: loading ? "not-allowed" : "pointer",
-                fontFamily: "'Georgia', serif", transition: "background 0.15s ease"
-              }}>
+            <div className="tl-input-footer">
+              <span className="tl-hint">Ctrl+Enter to translate</span>
+              <button
+                onClick={handleTranslate}
+                disabled={loading || !inputText.trim()}
+                className="tl-translate-btn"
+              >
                 {loading ? "Translating…" : "Translate ↵"}
               </button>
             </div>
           </div>
 
-          {/* Korean output */}
-          {result && (
-            <div style={{ background: "#fff", borderRadius: 20, padding: 24, boxShadow: "0 2px 12px rgba(0,0,0,0.07)" }}>
-              <label style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "#b29b87", display: "block", marginBottom: 12 }}>
-                Korean Output
-                {features.onDemandExplore !== "off" && (
-                  <span style={{ marginLeft: 8, fontWeight: 400, textTransform: "none", fontSize: 11, color: "#c4a882" }}>
-                    — tap a word to explore
-                  </span>
-                )}
-              </label>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 4, fontSize: 26, lineHeight: 1.8 }}>
-                {result.tokens.map((token) => {
-                  const canTap = features.onDemandExplore !== "off" && token.hasExploration;
-                  const isActive = exploringWord === token.text;
-                  return (
-                    <span
-                      key={token.id}
-                      onClick={() => handleWordTap(token)}
-                      style={{
-                        cursor: canTap ? "pointer" : "default",
-                        borderRadius: 6, padding: "0 3px",
-                        background: isActive ? "#ff8a5c22" : canTap ? "transparent" : "transparent",
-                        borderBottom: canTap ? "2px solid #ff8a5c66" : "2px solid transparent",
-                        color: isActive ? "#ff6b35" : "#2b1a11",
-                        transition: "all 0.12s ease",
-                      }}
-                    >
-                      {token.text}
-                    </span>
-                  );
-                })}
+          {/* ──────── LOW MODE OUTPUT ──────── */}
+          {level === "low" && result && (
+            <>
+              {/* Two-column translation: Korean | Back-translation */}
+              <div className="tl-card">
+                <label className="tl-label">Translation</label>
+                <div className="tl-two-col">
+                  <div className="tl-two-col-header">
+                    <span>Korean</span>
+                    <span>Back-translation</span>
+                  </div>
+                  {segments.map((seg, i) => (
+                    <div key={i} className="tl-two-col-row">
+                      <div className="tl-two-col-korean">{seg.korean}</div>
+                      <div className="tl-two-col-bt">{seg.backTranslation}</div>
+                    </div>
+                  ))}
+                </div>
               </div>
-            </div>
+            </>
           )}
 
-          {/* Selected alternative display */}
-          {result && selectedAlt !== null && features.alternatives !== "off" && (
-            <div style={{ background: "#fff8f0", borderRadius: 16, padding: 18, border: "1px solid #ffd4a8" }}>
-              <label style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "#b29b87", display: "block", marginBottom: 8 }}>
-                Selected Alternative
+          {/* ──────── MID MODE — Left panel: Korean segments ──────── */}
+          {level === "mid" && result && (
+            <div className="tl-card">
+              <label className="tl-label">
+                Korean Translation
+                <span className="tl-label-hint"> — tap a sentence to explore</span>
               </label>
-              <div style={{ fontSize: 22, color: "#2b1a11" }}>
-                {result.alternatives[selectedAlt]?.korean}
+              <div className="tl-sentences">
+                {segments.map((seg, i) => (
+                  <div
+                    key={i}
+                    className={`tl-sentence tl-sentence--interactive ${selectedIdx === i ? "tl-sentence--selected" : ""}`}
+                    onClick={() => handleSegmentTap(i)}
+                  >
+                    <div className="tl-korean">{seg.korean}</div>
+                  </div>
+                ))}
               </div>
             </div>
           )}
         </div>
 
-        {/* Right: Feature panel */}
-        <div
-          style={{
-            width: 360,
-            display: "flex",
-            flexDirection: "column",
-            gap: 0,
-            overflowY: "auto",
-            background: "rgb(255, 219, 180)",
-          }}
-        >
-          {/* F3: Cultural Context */} 
-          {features.culturalContext !== "off" && (
-            <div style={{ padding: 24, borderBottom: "1px solid #907c6c" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
-                <span style={{ fontSize: 18 }}>🏮</span>
-                <span style={{ fontWeight: 700, fontSize: 13, color: "#2b1a11" }}>Cultural Context</span>
-                {features.culturalContext === "partial" && (
-                  <span style={{ fontSize: 10, color: "#b07c2a", background: "#b07c2a18", padding: "1px 7px", borderRadius: 999, fontWeight: 600 }}>PARTIAL</span>
-                )}
+        {/* ──────── Right panel: Features ──────── */}
+        {(
+          <div className="tl-right">
+            {/* ── LOW MODE: Situation Briefing in right panel ── */}
+            {level === "low" && !result && (
+              <div className="tl-empty-state">
+                <div className="tl-empty-icon">↵</div>
+                <div>Translate text to see the situation briefing</div>
               </div>
-              {!result && (
-                <p style={{ fontSize: 13, color: "#2b1a11", margin: 0, fontStyle: "italic" }}>
-                  Cultural flags will appear here after translation.
-                </p>
-              )}
-              {result && result.culturalFlags.length === 0 && (
-                <p style={{ fontSize: 13, color: "#2b1a11", margin: 0 }}>✓ No cultural issues flagged.</p>
-              )}
-              {result && result.culturalFlags.map((flag) => (
-                <div key={flag.id} style={{
-                  background: flag.severity === "caution" ? "#fff3e0" : "#f0f7f2",
-                  borderLeft: `3px solid ${flag.severity === "caution" ? "#ff9800" : "#4a7c59"}`,
-                  borderRadius: "0 10px 10px 0", padding: "10px 14px", marginBottom: 10
-                }}>
-                  <div style={{ fontWeight: 700, fontSize: 13, color: "#2b1a11", marginBottom: 4 }}>
-                    {flag.severity === "caution" ? "⚠️" : "ℹ️"} {flag.title}
+            )}
+
+            {level === "low" && result && (
+              <div className="tl-feature-panel">
+                <div className="tl-fp-segment-preview">
+                  <span className="tl-fp-segment-label">Situation Briefing</span>
+                  <div className="tl-fp-briefing-summary">
+                    {result.situationBriefing.summary}
                   </div>
-                  {features.culturalContext !== "partial" && (
-                    <div style={{ fontSize: 12, color: "#5a4a3a", lineHeight: 1.5 }}>{flag.detail}</div>
+                </div>
+
+                <div className="tl-briefing-norms">
+                  {result.situationBriefing.norms.map((norm, i) => (
+                    <div key={i} className="tl-fp-section">
+                      <div className="tl-fp-section-header">
+                        <CategoryLabel category={norm.category} />
+                        <span className="tl-fp-section-title">
+                          {norm.category.charAt(0).toUpperCase() + norm.category.slice(1)}
+                        </span>
+                      </div>
+                      <div className="tl-fp-section-body">
+                        <p className="tl-fp-norm-text">{norm.description}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* ── MID MODE: Exploration panel ── */}
+            {level === "mid" && !result && (
+              <div className="tl-empty-state">
+                <div className="tl-empty-icon">↵</div>
+                <div>Translate text to explore features</div>
+              </div>
+            )}
+
+            {level === "mid" && result && selectedIdx === null && (
+              <div className="tl-empty-state">
+                <div className="tl-empty-icon">←</div>
+                <div>Tap a Korean sentence to explore it</div>
+              </div>
+            )}
+
+            {level === "mid" && result && selectedIdx !== null && (
+              <div className="tl-feature-panel">
+                {/* Selected segment preview */}
+                <div className="tl-fp-segment-preview">
+                  <span className="tl-fp-segment-label">Selected segment</span>
+                  <div className="tl-fp-segment-korean">{segments[selectedIdx].korean}</div>
+                </div>
+
+                {/* Back-translation — always shown automatically */}
+                <div className="tl-fp-section tl-fp-section--bt">
+                  <div className="tl-fp-section-header">
+                    <span className="tl-fp-section-icon">↩</span>
+                    <span className="tl-fp-section-title">Back-translation</span>
+                  </div>
+                  <div className="tl-fp-section-body">
+                    <p className="tl-fp-bt-text">{segments[selectedIdx].backTranslation}</p>
+                  </div>
+                </div>
+
+                {/* See alternatives — expandable */}
+                <div className="tl-fp-section">
+                  <div
+                    className="tl-fp-section-header tl-fp-section-header--clickable"
+                    onClick={() => toggleSection("alternatives")}
+                  >
+                    <span className="tl-fp-section-icon">↔</span>
+                    <span className="tl-fp-section-title">See alternatives</span>
+                    <span className={`tl-chevron ${expandedSections.has("alternatives") ? "tl-chevron--open" : ""}`}>▸</span>
+                  </div>
+                  {expandedSections.has("alternatives") && (
+                    <div className="tl-fp-section-body">
+                      {explorationLoading && !exploration && (
+                        <div className="tl-exploration-loading">
+                          <div className="tl-spinner" />
+                          <span>Loading alternatives…</span>
+                        </div>
+                      )}
+                      {exploration && exploration.alternatives.map((alt, i) => (
+                        <div key={i} className="tl-alt-card">
+                          <div className="tl-alt-top">
+                            <span className="tl-alt-korean">{alt.korean}</span>
+                            <span className={`tl-formality-badge tl-formality--${alt.formality.replace(/\s+/g, "-")}`}>
+                              {alt.formality}
+                            </span>
+                          </div>
+                          <div className="tl-alt-english">{alt.english}</div>
+                          <div className="tl-alt-nuance">{alt.nuanceDiff}</div>
+                          <button
+                            className="tl-alt-use-btn"
+                            onClick={() => handleReplaceSegment(alt.korean)}
+                          >
+                            Use this ↵
+                          </button>
+                        </div>
+                      ))}
+                      {exploration && exploration.alternatives.length === 0 && (
+                        <p className="tl-placeholder">No alternatives available.</p>
+                      )}
+                    </div>
                   )}
                 </div>
-              ))}
-            </div>
-          )}
 
-          {/* F4: On-demand Exploration */}
-          {features.onDemandExplore !== "off" && (
-            <div style={{ padding: 24, borderBottom: "1px solid #907c6c" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
-                <span style={{ fontSize: 18 }}>🔍</span>
-                <span style={{ fontWeight: 700, fontSize: 13, color: "#2b1a11" }}>Word Exploration</span>
-              </div>
-              {!exploringWord && (
-                <p style={{ fontSize: 13, color: "#2b1a11", margin: 0, fontStyle: "italic" }}>
-                  Tap an underlined word in the Korean output to explore it.
-                </p>
-              )}
-              {explorationLoading && (
-                <div style={{ fontSize: 13, color: "#2b1a11", fontStyle: "italic" }}>Exploring "{exploringWord}"…</div>
-              )}
-              {exploration && !explorationLoading && (
-                <div style={{ background: "#fff", borderRadius: 14, padding: 16, boxShadow: "0 1px 8px rgba(0,0,0,0.06)" }}>
-                  <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 12 }}>
-                    <span style={{ fontSize: 24, fontWeight: 700, color: "#2b1a11" }}>{exploration.word}</span>
-                    <span style={{ fontSize: 14, color: "#2b1a11" }}>{exploration.romanization}</span>
+                {/* See grammar pattern — expandable */}
+                <div className="tl-fp-section">
+                  <div
+                    className="tl-fp-section-header tl-fp-section-header--clickable"
+                    onClick={() => toggleSection("grammar")}
+                  >
+                    <span className="tl-fp-section-icon">≡</span>
+                    <span className="tl-fp-section-title">See grammar pattern</span>
+                    <span className={`tl-chevron ${expandedSections.has("grammar") ? "tl-chevron--open" : ""}`}>▸</span>
                   </div>
-                  <div style={{ marginBottom: 10 }}>
-                    <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "#2b1a11", marginBottom: 3 }}>Meaning</div>
-                    <div style={{ fontSize: 13, color: "#2b1a11" }}>{exploration.meaning}</div>
-                  </div>
-                  <div style={{ marginBottom: 10 }}>
-                    <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "#2b1a11", marginBottom: 3 }}>Usage Context</div>
-                    <div style={{ fontSize: 13, color: "#2b1a11" }}>{exploration.usageContext}</div>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "#2b1a11", marginBottom: 3 }}>Grammar Note</div>
-                    <div style={{ fontSize: 13, color: "#2b1a11" }}>{exploration.grammarNote}</div>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* F5: Alternatives */}
-          {features.alternatives !== "off" && (
-            <div style={{ padding: 24 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, color: "#907c6c" }}>
-                <span style={{ fontSize: 18 }}>↔️</span>
-                <span style={{ fontWeight: 700, fontSize: 13, color: "#2b1a11" }}>Alternative Expressions</span>
-                {features.alternatives === "partial" && (
-                  <span style={{ fontSize: 10, color: "#b07c2a", background: "#b07c2a18", padding: "1px 7px", borderRadius: 999, fontWeight: 600 }}>PARTIAL</span>
-                )}
-              </div>
-              {!result && (
-                <p style={{ fontSize: 13, color: "#2b1a11", margin: 0, fontStyle: "italic" }}>
-                  Alternatives will appear here after translation.
-                </p>
-              )}
-              {result && result.alternatives.length === 0 && (
-                <p style={{ fontSize: 13, color: "#2b1a11", margin: 0 }}>No alternatives generated.</p>
-              )}
-              {result && result.alternatives.map((alt, i) => (
-                <div
-                  key={i}
-                  onClick={() => setSelectedAlt(selectedAlt === i ? null : i)}
-                  style={{
-                    background: selectedAlt === i ? "#fff3e8" : "#fff",
-                    border: `1px solid ${selectedAlt === i ? "#ffb76b" : "#ede3da"}`,
-                    borderRadius: 14, padding: "12px 16px", marginBottom: 10,
-                    cursor: "pointer", transition: "all 0.15s ease",
-                    boxShadow: selectedAlt === i ? "0 4px 16px rgba(255,138,92,0.15)" : "none"
-                  }}
-                >
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
-                    <FormalityBadge formality={alt.formality} />
-                    {selectedAlt === i && <span style={{ fontSize: 11, color: "#ff8a5c" }}>✓ selected</span>}
-                  </div>
-                  <div style={{ fontSize: 18, color: "#2b1a11", marginBottom: 4 }}>{alt.korean}</div>
-                  {features.alternatives !== "partial" && (
-                    <div style={{ fontSize: 12, color: "#2b1a11" }}>{alt.nuance}</div>
+                  {expandedSections.has("grammar") && (
+                    <div className="tl-fp-section-body">
+                      {explorationLoading && !exploration && (
+                        <div className="tl-exploration-loading">
+                          <div className="tl-spinner" />
+                          <span>Loading grammar…</span>
+                        </div>
+                      )}
+                      {exploration && exploration.grammarPatterns.map((pat, i) => (
+                        <div key={i} className="tl-pattern-card">
+                          <div className="tl-pattern-name">{pat.pattern}</div>
+                          <div className="tl-pattern-desc">{pat.description}</div>
+                          <div className="tl-pattern-examples">
+                            {pat.examples.map((ex, j) => (
+                              <div key={j} className="tl-pattern-example">• {ex}</div>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                      {exploration && exploration.grammarPatterns.length === 0 && (
+                        <p className="tl-placeholder">No grammar patterns identified.</p>
+                      )}
+                    </div>
                   )}
                 </div>
-              ))}
-            </div>
-          )}
 
-          {/* Empty state when all features are off */}
-          {features.culturalContext === "off" && features.onDemandExplore === "off" && features.alternatives === "off" && (
-            <div style={{ padding: 40, textAlign: "center" }}>
-              <div style={{ fontSize: 32, marginBottom: 12 }}>🔇</div>
-              <div style={{ fontSize: 14, color: "#b29b87" }}>All features are off at this proficiency level.</div>
-            </div>
-          )}
-        </div>
+                {/* See cultural context — expandable */}
+                <div className="tl-fp-section">
+                  <div
+                    className="tl-fp-section-header tl-fp-section-header--clickable"
+                    onClick={() => toggleSection("cultural")}
+                  >
+                    <span className="tl-fp-section-icon">∞</span>
+                    <span className="tl-fp-section-title">See cultural context</span>
+                    <span className={`tl-chevron ${expandedSections.has("cultural") ? "tl-chevron--open" : ""}`}>▸</span>
+                  </div>
+                  {expandedSections.has("cultural") && (
+                    <div className="tl-fp-section-body">
+                      {explorationLoading && !exploration && (
+                        <div className="tl-exploration-loading">
+                          <div className="tl-spinner" />
+                          <span>Loading context…</span>
+                        </div>
+                      )}
+                      {exploration && (
+                        <p className="tl-fp-cultural-text">
+                          {exploration.culturalContext || "No specific cultural notes for this segment."}
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
