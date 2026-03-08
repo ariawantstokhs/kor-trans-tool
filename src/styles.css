@@ -802,6 +802,120 @@ body {
   user-select: text;
 }
 
+/* ── Selectable Korean text (Mid mode) ── */
+
+.tl-korean--selectable {
+  cursor: text;
+  user-select: text;
+}
+
+.tl-korean--selectable::selection {
+  background: #d9ccf2;
+}
+
+.tl-highlight {
+  background: #e8deff;
+  color: inherit;
+  border-radius: 3px;
+  padding: 1px 2px;
+}
+
+/* ── Selection popup (floating Explore button) ── */
+
+.tl-selection-popup {
+  z-index: 100;
+  animation: tl-fadeIn 0.15s ease;
+}
+
+.tl-selection-popup-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 16px;
+  border-radius: 999px;
+  border: none;
+  background: #2b1a11;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+  transition: background 0.15s ease;
+}
+
+.tl-selection-popup-btn:hover {
+  background: #8b5cf6;
+}
+
+/* ── Back-translation toggle (per sentence) ── */
+
+.tl-bt-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+
+.tl-bt-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1px solid #e4d5c9;
+  background: #faf5ef;
+  color: #7b6a5c;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+
+.tl-bt-toggle:hover {
+  border-color: #8b5cf6;
+  color: #8b5cf6;
+  background: #f5f0ff;
+}
+
+.tl-bt-inline {
+  margin-top: 6px;
+  padding: 8px 12px;
+  background: #faf5ef;
+  border-radius: 8px;
+  font-size: 14px;
+  line-height: 1.6;
+  color: #7b6a5c;
+  font-style: italic;
+  animation: tl-fadeIn 0.2s ease;
+}
+
+/* ── Phrase header (drill-down top) ── */
+
+.tl-phrase-header {
+  padding: 18px 24px;
+  border-bottom: 1px solid #ede3da;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.tl-phrase-header-label {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #8b5cf6;
+}
+
+.tl-phrase-header-text {
+  font-size: 22px;
+  font-weight: 600;
+  color: #2b1a11;
+}
+
+
+
 /* ── Feature panel (right side, mid mode) ── */
 
 .tl-feature-panel {

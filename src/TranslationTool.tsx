@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback } from "react";
+import React, { useState, useRef, useCallback, useEffect } from "react";
 import { ProficiencyEngine, ProficiencyLevel, FeatureMode } from "./proficiencyEngine";
 import OpenAI from "openai";
 
@@ -126,8 +126,11 @@ Rules:
 - No markdown, no prose, pure JSON only.`;
 
   const raw = await callOpenAI(systemPrompt, `Translate this professional email to Korean:\n"${text}"`);
+  console.log("[Call 1] Raw response length:", raw.length);
+  console.log("[Call 1] Raw response:", raw.substring(0, 500));
   try {
-    const parsed = JSON.parse(raw.replace(/```json|```/g, "").trim());
+    const cleaned = raw.replace(/```json|```/g, "").trim();
+    const parsed = JSON.parse(cleaned);
     return {
       koreanTranslation: parsed.korean_translation || "",
       segments: (parsed.sentence_segments || []).map((s: any) => ({
@@ -144,7 +147,9 @@ Rules:
         originalEnglish: s.original_english || undefined,
       })),
     };
-  } catch {
+  } catch (err) {
+    console.error("[Call 1] JSON parse error:", err);
+    console.log("[Call 1] Failed raw:", raw);
     return {
       koreanTranslation: raw,
       segments: [{ korean: raw, backTranslation: "(parsing error)", tokens: [], communicativeFunction: "" }],
@@ -177,14 +182,15 @@ User's question: ${userQuestion}`;
   return await callOpenAI(systemPrompt, userMessage);
 }
 
-// ── Call 3: Exploration Data (Mid only, on-demand) ──
+// ── Call 3: Exploration Data (Mid only, on-demand, phrase-level) ──
 
 async function fetchExploration(
-  koreanSegment: string,
-  fullContext: string,
+  tappedExpression: string,
+  fullKoreanSentence: string,
+  backTranslation: string,
   originalEnglish: string
 ): Promise<ExplorationResult> {
-  const systemPrompt = `You are a Korean language tutor. The user has tapped a segment of a Korean translation to learn more.
+  const systemPrompt = `You are a Korean language tutor. The user selected a specific word or phrase in the Korean translation to learn more.
 Respond ONLY with valid JSON:
 {
   "alternatives": [
@@ -202,20 +208,22 @@ Respond ONLY with valid JSON:
       "examples": ["<example 1>", "<example 2>"]
     }
   ],
-  "cultural_context": "<1-2 sentences about cultural/social norms relevant to this specific segment>"
+  "cultural_context": "<1-2 sentences about cultural/social norms relevant to this specific expression in this context>"
 }
 
 Rules:
+- Focus your analysis on the selected expression within its sentence context.
 - alternatives: 2-3 alternative ways to express the same idea with different formality/nuance. Present as OPTIONS, not corrections.
 - grammar_patterns: 1-2 reusable grammar patterns from this expression with examples.
-- cultural_context: segment-specific cultural norm (formality, honorifics, social appropriateness).
-- Use the original English and communicative context as background to inform your analysis, but keep explanations focused on the Korean segment.
+- cultural_context: expression-specific cultural norm (formality, honorifics, social appropriateness).
 - All explanations in English. No markdown, pure JSON only.`;
 
-  const raw = await callOpenAI(
-    systemPrompt,
-    `Explain this Korean segment: "${koreanSegment}"\nFull sentence context: "${fullContext}"\nOriginal English context: "${originalEnglish}"`
-  );
+  const userMessage = `Selected expression: "${tappedExpression}"
+Full Korean sentence: "${fullKoreanSentence}"
+Back-translation: "${backTranslation}"
+Original English: "${originalEnglish}"`;
+
+  const raw = await callOpenAI(systemPrompt, userMessage);
   try {
     const parsed = JSON.parse(raw.replace(/```json|```/g, "").trim());
     return {
@@ -273,10 +281,12 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
   const [loading, setLoading] = useState(false);
 
   // Mid mode state
-  const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
+  const [selectedPhrase, setSelectedPhrase] = useState<{ text: string; segIdx: number } | null>(null);
   const [exploration, setExploration] = useState<ExplorationResult | null>(null);
   const [explorationLoading, setExplorationLoading] = useState(false);
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set());
+  const [showBT, setShowBT] = useState<Record<number, boolean>>({});
+  const [selectionPopup, setSelectionPopup] = useState<{ text: string; segIdx: number; x: number; y: number } | null>(null);
 
   // Low follow-up state
   const [followUps, setFollowUps] = useState<Record<number, FollowUpQA[]>>({});
@@ -289,6 +299,7 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
   const [interactionLog, setInteractionLog] = useState<Array<{ segIdx: number; action: string; timestamp: number }>>([]);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const sentencesRef = useRef<HTMLDivElement>(null);
   const { features, level } = engine;
 
   // ── Handlers ──
@@ -298,9 +309,11 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
     setLoading(true);
     setResult(null);
     setSegments([]);
-    setSelectedIdx(null);
+    setSelectedPhrase(null);
     setExploration(null);
     setExpandedSections(new Set());
+    setShowBT({});
+    setSelectionPopup(null);
     setFollowUps({});
     setFollowUpLoading({});
     setFollowUpInputs({});
@@ -316,23 +329,61 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
     }
   };
 
-  const handleSegmentTap = async (idx: number) => {
-    if (level === "low") return; // No interactivity in low mode
-    setSelectedIdx(idx);
+  const handleTextSelection = useCallback(() => {
+    if (level === "low") return;
+    const sel = window.getSelection();
+    const text = sel?.toString().trim() || "";
+    if (text.length < 2) {
+      setSelectionPopup(null);
+      return;
+    }
+    // Find which segment this selection belongs to
+    const anchor = sel?.anchorNode?.parentElement;
+    if (!anchor) return;
+    const sentenceEl = anchor.closest("[data-seg-idx]");
+    if (!sentenceEl) return;
+    const segIdx = parseInt(sentenceEl.getAttribute("data-seg-idx") || "-1", 10);
+    if (segIdx < 0) return;
+    // Position popup near selection
+    const range = sel?.getRangeAt(0);
+    if (!range) return;
+    const rect = range.getBoundingClientRect();
+    setSelectionPopup({ text, segIdx, x: rect.left + rect.width / 2, y: rect.top - 8 });
+  }, [level]);
+
+  const handleExploreSelection = () => {
+    if (!selectionPopup) return;
+    setSelectedPhrase({ text: selectionPopup.text, segIdx: selectionPopup.segIdx });
     setExploration(null);
     setExpandedSections(new Set());
+    setSelectionPopup(null);
+    window.getSelection()?.removeAllRanges();
+    // Auto-fetch exploration
+    const seg = segments[selectionPopup.segIdx];
+    setExplorationLoading(true);
+    fetchExploration(
+      selectionPopup.text,
+      seg.korean,
+      seg.backTranslation,
+      seg.originalEnglish || inputText
+    ).then((res) => {
+      setExploration(res);
+    }).finally(() => {
+      setExplorationLoading(false);
+    });
   };
 
   const handleFetchExploration = async () => {
-    if (selectedIdx === null || !result) return;
-    const seg = segments[selectedIdx];
-    setInteractionLog((prev) => [...prev, { segIdx: selectedIdx, action: "exploration_opened", timestamp: Date.now() }]);
+    if (!selectedPhrase || !result) return;
+    const seg = segments[selectedPhrase.segIdx];
+    setInteractionLog((prev) => [...prev, { segIdx: selectedPhrase.segIdx, action: "exploration_opened", timestamp: Date.now() }]);
     setExplorationLoading(true);
     try {
       const res = await fetchExploration(
+        selectedPhrase.text,
         seg.korean,
-        segments.map((s) => s.korean).join(" "),
-        inputText
+        seg.backTranslation,
+        seg.originalEnglish || inputText
       );
       setExploration(res);
     } finally {
@@ -357,10 +408,12 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
   };
 
   const handleReplaceSegment = (altKorean: string) => {
-    if (selectedIdx === null) return;
+    if (!selectedPhrase) return;
+    const idx = selectedPhrase.segIdx;
     setSegments((prev) => {
       const next = [...prev];
-      next[selectedIdx] = { ...next[selectedIdx], korean: altKorean };
+      const oldKorean = next[idx].korean;
+      next[idx] = { ...next[idx], korean: oldKorean.replace(selectedPhrase.text, altKorean) };
       return next;
     });
   };
@@ -399,6 +452,18 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
   }, [interactionLog]);
 
   const levels: ProficiencyLevel[] = ["low", "mid"];
+
+  // Dismiss selection popup on click outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest(".tl-selection-popup")) {
+        setSelectionPopup(null);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
 
   // ── Render ──
 
@@ -543,14 +608,14 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
             </div>
           )}
 
-          {/* ──────── MID MODE — Left panel: Korean segments ──────── */}
+          {/* ──────── MID MODE — Left panel: Korean segments (select text to explore) ──────── */}
           {level === "mid" && result && (
             <div className="tl-card">
               <label className="tl-label">
                 Korean Translation
-                <span className="tl-label-hint"> — tap a sentence to explore</span>
+                <span className="tl-label-hint"> — select a word to explore</span>
               </label>
-              <div className="tl-sentences">
+              <div className="tl-sentences" ref={sentencesRef} onMouseUp={handleTextSelection}>
                 {segments.map((seg, i) => (
                   <div key={i} className="tl-segment-wrapper">
                     <button
@@ -561,14 +626,62 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
                       <span className="tl-review-icon" />
                     </button>
                     <div
-                      className={`tl-sentence tl-sentence--interactive ${selectedIdx === i ? "tl-sentence--selected" : ""}`}
-                      onClick={() => handleSegmentTap(i)}
+                      className="tl-sentence"
+                      data-seg-idx={i}
                     >
-                      <div className="tl-korean">{seg.korean}</div>
+                      <div className="tl-korean tl-korean--selectable">
+                        {selectedPhrase && selectedPhrase.segIdx === i && seg.korean.includes(selectedPhrase.text) ? (
+                          (() => {
+                            const idx = seg.korean.indexOf(selectedPhrase.text);
+                            return (
+                              <>
+                                {seg.korean.slice(0, idx)}
+                                <mark className="tl-highlight">{selectedPhrase.text}</mark>
+                                {seg.korean.slice(idx + selectedPhrase.text.length)}
+                              </>
+                            );
+                          })()
+                        ) : (
+                          seg.korean
+                        )}
+                      </div>
+                      <div className="tl-bt-row">
+                        <button
+                          className="tl-bt-toggle"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setShowBT((prev) => ({ ...prev, [i]: !prev[i] }));
+                          }}
+                          title="Show back-translation"
+                        >
+                          ↩
+                        </button>
+                      </div>
+                      {showBT[i] && (
+                        <div className="tl-bt-inline">{seg.backTranslation}</div>
+                      )}
                     </div>
                   </div>
                 ))}
               </div>
+
+              {/* Floating selection popup */}
+              {selectionPopup && (
+                <div
+                  className="tl-selection-popup"
+                  style={{
+                    position: "fixed",
+                    left: selectionPopup.x,
+                    top: selectionPopup.y,
+                    transform: "translate(-50%, -100%)",
+                  }}
+                >
+                  <button className="tl-selection-popup-btn" onClick={handleExploreSelection}>
+                    Explore ▸
+                  </button>
+                </div>
+              )}
+
               {/* Readiness bar */}
               <div className="tl-readiness-bar">
                 <span className="tl-readiness-text">
@@ -585,31 +698,36 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
         {/* ──────── Right panel: Mid mode features only ──────── */}
         {level === "mid" && (
           <div className="tl-right">
-            {/* ── MID MODE: Exploration panel ── */}
-            {level === "mid" && !result && (
+            {!result && (
               <div className="tl-empty-state">
                 <div className="tl-empty-icon">↵</div>
                 <div>Translate text to explore features</div>
               </div>
             )}
 
-            {level === "mid" && result && selectedIdx === null && (
+            {result && !selectedPhrase && (
               <div className="tl-empty-state">
                 <div className="tl-empty-icon">←</div>
-                <div>Tap a Korean sentence to explore it</div>
+                <div>Select a Korean word to explore it</div>
               </div>
             )}
 
-            {level === "mid" && result && selectedIdx !== null && (
+            {result && selectedPhrase && (
               <div className="tl-feature-panel">
-                {/* Back-translation — always shown automatically */}
+                {/* Phrase header */}
+                <div className="tl-phrase-header">
+                  <span className="tl-phrase-header-label">About:</span>
+                  <span className="tl-phrase-header-text">{selectedPhrase.text}</span>
+                </div>
+
+                {/* Back-translation — always shown */}
                 <div className="tl-fp-section tl-fp-section--bt">
                   <div className="tl-fp-section-header">
                     <span className="tl-fp-section-icon">↩</span>
                     <span className="tl-fp-section-title">Back-translation</span>
                   </div>
                   <div className="tl-fp-section-body">
-                    <p className="tl-fp-bt-text">{segments[selectedIdx].backTranslation}</p>
+                    <p className="tl-fp-bt-text">{segments[selectedPhrase.segIdx].backTranslation}</p>
                   </div>
                 </div>
 
@@ -712,7 +830,7 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
                       )}
                       {exploration && (
                         <p className="tl-fp-cultural-text">
-                          {exploration.culturalContext || "No specific cultural notes for this segment."}
+                          {exploration.culturalContext || "No specific cultural notes for this expression."}
                         </p>
                       )}
                     </div>
