@@ -54,6 +54,16 @@ interface ExplorationResult {
   culturalContext: string;
 }
 
+interface ActiveExploration {
+  id: string;
+  text: string;
+  segIdx: number;
+  userQuestion: string | null;
+  result: ExplorationResult | null;
+  loading: boolean;
+  expandedSections: Set<string>;
+}
+
 interface TranslationToolProps {
   engine: ProficiencyEngine;
   onChangeLevel: (level: ProficiencyLevel) => void;
@@ -254,6 +264,7 @@ Respond ONLY with valid JSON:
 
 STRICT RULES:
 - "explanation" is the PRIMARY field. Answer the user's question directly and thoroughly.
+- STRICT RULE FOR ALTERNATIVES: The "korean" field inside alternatives MUST ONLY contain the exact phrase that can be swapped directly with the selected expression. DO NOT output the full sentence.
 - Only include alternatives, grammar_patterns, cultural_context if they are relevant to the user's question. If not relevant, return empty array [] or empty string "".
 - All explanations in English. No markdown, pure JSON only.`;
     userMessage = "Explore this expression.";
@@ -285,6 +296,7 @@ Rules:
 - "explanation" gives a concise overview first. The rest of the fields provide detailed drill-down.
 - Focus your analysis on the selected expression within its sentence context.
 - alternatives: 2-3 alternative ways to express the same idea with different formality/nuance. Present as OPTIONS, not corrections.
+- STRICT RULE FOR ALTERNATIVES: The "korean" field inside alternatives MUST ONLY contain the exact phrase that can be swapped directly with the selected expression. DO NOT output the full sentence.
 - grammar_patterns: 1-2 reusable grammar patterns from this expression with examples.
 - cultural_context: expression-specific cultural norm (formality, honorifics, social appropriateness).
 - All explanations in English. No markdown, pure JSON only.`;
@@ -354,14 +366,10 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
   const [loading, setLoading] = useState(false);
 
   // Mid mode state
-  const [selectedPhrase, setSelectedPhrase] = useState<{ text: string; segIdx: number } | null>(null);
-  const [exploration, setExploration] = useState<ExplorationResult | null>(null);
-  const [explorationLoading, setExplorationLoading] = useState(false);
-  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set());
+  const [activeExplorations, setActiveExplorations] = useState<ActiveExploration[]>([]);
   const [showBT, setShowBT] = useState<Record<number, boolean>>({});
   const [selectionPopup, setSelectionPopup] = useState<{ text: string; segIdx: number; x: number; y: number } | null>(null);
   const [popupQuestion, setPopupQuestion] = useState("");
-  const [userQuestion, setUserQuestion] = useState<string | null>(null);
 
   // Low slide view state
   const [lowModeStep, setLowModeStep] = useState<LowModeStep>('input');
@@ -385,9 +393,7 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
     setLoading(true);
     setResult(null);
     setSegments([]);
-    setSelectedPhrase(null);
-    setExploration(null);
-    setExpandedSections(new Set());
+    setActiveExplorations([]);
     setShowBT({});
     setSelectionPopup(null);
     setLowModeStep('input');
@@ -435,77 +441,99 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
   const handleExploreSelection = () => {
     if (!selectionPopup) return;
     const question = popupQuestion.trim() || null;
-    setSelectedPhrase({ text: selectionPopup.text, segIdx: selectionPopup.segIdx });
-    setUserQuestion(question);
-    setExploration(null);
-    setExpandedSections(new Set());
+    const newId = Date.now().toString() + Math.random().toString(36).substring(2, 9);
+
+    const newExploration: ActiveExploration = {
+      id: newId,
+      text: selectionPopup.text,
+      segIdx: selectionPopup.segIdx,
+      userQuestion: question,
+      result: null,
+      loading: true,
+      expandedSections: new Set(),
+    };
+
+    setActiveExplorations((prev) => [newExploration, ...prev]);
+
     setSelectionPopup(null);
     setPopupQuestion("");
     window.getSelection()?.removeAllRanges();
+
     // Auto-fetch exploration
     const seg = segments[selectionPopup.segIdx];
     const mode = question ? "tailored" : "general";
     setInteractionLog((prev) => [...prev, { segIdx: selectionPopup.segIdx, action: "exploration_opened", userQuestion: question, mode, timestamp: Date.now() }]);
-    setExplorationLoading(true);
+
     fetchExploration(
-      selectionPopup.text,
+      newExploration.text,
       seg.korean,
       seg.backTranslation,
       seg.originalEnglish || inputText,
       question
     ).then((res) => {
-      setExploration(res);
-    }).finally(() => {
-      setExplorationLoading(false);
+      setActiveExplorations((prev) =>
+        prev.map(exp => exp.id === newId ? { ...exp, result: res, loading: false } : exp)
+      );
+    }).catch(() => {
+      setActiveExplorations((prev) =>
+        prev.map(exp => exp.id === newId ? { ...exp, loading: false } : exp)
+      );
     });
   };
 
-  const handleFetchExploration = async () => {
-    if (!selectedPhrase || !result) return;
-    const seg = segments[selectedPhrase.segIdx];
+  const removeExploration = (id: string) => {
+    setActiveExplorations((prev) => prev.filter(exp => exp.id !== id));
+  };
+
+  const handleFetchExploration = async (id: string, text: string, segIdx: number, userQuestion: string | null) => {
+    if (!result) return;
+    const seg = segments[segIdx];
     const mode = userQuestion ? "tailored" : "general";
-    setInteractionLog((prev) => [...prev, { segIdx: selectedPhrase.segIdx, action: "exploration_opened", userQuestion, mode, timestamp: Date.now() }]);
-    setExplorationLoading(true);
+    setInteractionLog((prev) => [...prev, { segIdx, action: "exploration_opened", userQuestion, mode, timestamp: Date.now() }]);
+
+    setActiveExplorations((prev) => prev.map(e => e.id === id ? { ...e, loading: true } : e));
     try {
       const res = await fetchExploration(
-        selectedPhrase.text,
+        text,
         seg.korean,
         seg.backTranslation,
         seg.originalEnglish || inputText,
         userQuestion
       );
-      setExploration(res);
-    } finally {
-      setExplorationLoading(false);
+      setActiveExplorations((prev) => prev.map(e => e.id === id ? { ...e, result: res, loading: false } : e));
+    } catch {
+      setActiveExplorations((prev) => prev.map(e => e.id === id ? { ...e, loading: false } : e));
     }
   };
 
-  const toggleSection = (section: string) => {
-    setExpandedSections((prev) => {
-      const next = new Set(prev);
-      if (next.has(section)) {
-        next.delete(section);
-      } else {
-        next.add(section);
-        // Fetch exploration data on first expand if not loaded
-        if (!exploration && !explorationLoading) {
-          handleFetchExploration();
-        }
+  const toggleSection = (id: string, section: string) => {
+    const expToUpdate = activeExplorations.find(e => e.id === id);
+    if (!expToUpdate) return;
+    const next = new Set(expToUpdate.expandedSections);
+    if (next.has(section)) {
+      next.delete(section);
+    } else {
+      next.add(section);
+      if (!expToUpdate.result && !expToUpdate.loading) {
+        handleFetchExploration(id, expToUpdate.text, expToUpdate.segIdx, expToUpdate.userQuestion);
       }
-      return next;
-    });
+    }
+    setActiveExplorations((prev) => prev.map(exp => exp.id === id ? { ...exp, expandedSections: next } : exp));
   };
 
-  const handleReplaceSegment = (altKorean: string) => {
-    if (!selectedPhrase) return;
-    const idx = selectedPhrase.segIdx;
+  const handleReplaceSegment = (id: string, segIdx: number, textToReplace: string, altKorean: string) => {
+    // Strip leading and trailing ellipses or spaces that the AI might generate
+    const cleanedAlt = altKorean.replace(/^[.\s]+/, '').replace(/[.\s]+$/, '');
     setSegments((prev) => {
       const next = [...prev];
-      const oldKorean = next[idx].korean;
-      next[idx] = { ...next[idx], korean: oldKorean.replace(selectedPhrase.text, altKorean) };
+      const oldKorean = next[segIdx].korean;
+      // If the AI accidentally returned the whole sentence instead of just the phrase,
+      // a simple replace might create duplicates or inject weirdness.
+      // But standard replace is the safest fallback.
+      next[segIdx] = { ...next[segIdx], korean: oldKorean.replace(textToReplace, cleanedAlt) };
       return next;
     });
-    setSelectedPhrase({ ...selectedPhrase, text: altKorean });
+    setActiveExplorations((prev) => prev.map(e => e.id === id ? { ...e, text: cleanedAlt } : e));
   };
 
   const toggleReview = useCallback((idx: number) => {
@@ -550,17 +578,16 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
     setSentenceOptions(prev => ({ ...prev, [idx]: validOpts }));
   }, [sentenceOptions]);
 
-  // Pre-fetch next options
+  // Pre-fetch all options in parallel
   useEffect(() => {
     if (level === 'low' && lowModeStep === 'slides' && segments.length > 0) {
-      if (!sentenceOptions[currentSlideIndex]) {
-        fetchOptionsForIndex(currentSlideIndex, segments, inputText);
-      }
-      if (currentSlideIndex + 1 < segments.length && !sentenceOptions[currentSlideIndex + 1]) {
-        fetchOptionsForIndex(currentSlideIndex + 1, segments, inputText);
-      }
+      segments.forEach((_, idx) => {
+        if (!sentenceOptions[idx] && !fetchingOptions.current.has(idx)) {
+          fetchOptionsForIndex(idx, segments, inputText);
+        }
+      });
     }
-  }, [level, lowModeStep, currentSlideIndex, segments, inputText, sentenceOptions, fetchOptionsForIndex]);
+  }, [level, lowModeStep, segments, inputText, sentenceOptions, fetchOptionsForIndex]);
 
   const handleOptionSelect = (idx: number, optIdx: number) => {
     setSelectedOptions(prev => {
@@ -708,8 +735,7 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
                   onClick={() => {
                     setResult(null);
                     setSegments([]);
-                    setSelectedPhrase(null);
-                    setExploration(null);
+                    setActiveExplorations([]);
                   }}
                   title="Edit English input"
                 >
@@ -732,22 +758,34 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
                     >
                       <div className="tl-korean tl-korean--selectable">
                         {(() => {
-                          const hl = selectedPhrase && selectedPhrase.segIdx === i && seg.korean.includes(selectedPhrase.text)
-                            ? selectedPhrase
-                            : selectionPopup && selectionPopup.segIdx === i && seg.korean.includes(selectionPopup.text)
-                              ? selectionPopup
-                              : null;
-                          if (hl) {
-                            const idx = seg.korean.indexOf(hl.text);
-                            return (
-                              <>
-                                {seg.korean.slice(0, idx)}
-                                <mark className="tl-highlight">{hl.text}</mark>
-                                {seg.korean.slice(idx + hl.text.length)}
-                              </>
-                            );
-                          }
-                          return seg.korean;
+                          const phrasesToHighlight = Array.from(new Set(
+                            activeExplorations
+                              .filter(e => e.segIdx === i && seg.korean.includes(e.text))
+                              .map(e => e.text)
+                              .concat(selectionPopup && selectionPopup.segIdx === i && seg.korean.includes(selectionPopup.text) ? [selectionPopup.text] : [])
+                          ));
+
+                          if (phrasesToHighlight.length === 0) return seg.korean;
+
+                          let elements: (React.ReactNode)[] = [seg.korean];
+                          phrasesToHighlight.forEach((phrase, hIdx) => {
+                            const newElements: React.ReactNode[] = [];
+                            elements.forEach(el => {
+                              if (typeof el === 'string') {
+                                const parts = el.split(phrase);
+                                for (let p = 0; p < parts.length; p++) {
+                                  newElements.push(parts[p]);
+                                  if (p < parts.length - 1) {
+                                    newElements.push(<mark key={`${hIdx}-${p}`} className="tl-highlight">{phrase}</mark>);
+                                  }
+                                }
+                              } else {
+                                newElements.push(el);
+                              }
+                            });
+                            elements = newElements;
+                          });
+                          return elements.map((el, idx) => React.isValidElement(el) ? React.cloneElement(el as React.ReactElement, { key: idx }) : el);
                         })()}
                       </div>
                       <div className="tl-bt-row">
@@ -819,105 +857,121 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
               </div>
             )}
 
-            {result && !selectedPhrase && (
+            {result && activeExplorations.length === 0 && (
               <div className="tl-empty-state">
                 <div className="tl-empty-icon">←</div>
                 <div>Select a Korean word to explore it</div>
               </div>
             )}
 
-            {result && selectedPhrase && (
-              <div className="tl-feature-panel">
+            {result && activeExplorations.map((exp) => (
+              <div key={exp.id} className="tl-feature-panel" style={{ marginTop: "16px", borderRadius: "16px", border: "1px solid #ede3da", overflow: "hidden", flexShrink: 0 }}>
                 {/* Phrase header */}
-                <div className="tl-phrase-header">
-                  <span className="tl-phrase-header-label">About:</span>
-                  <span className="tl-phrase-header-text">{selectedPhrase.text}</span>
+                <div className="tl-phrase-header" style={{ position: "relative", background: "#fff" }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
+                    <span className="tl-phrase-header-label">About:</span>
+                    <span className="tl-phrase-header-text">{exp.text}</span>
+                  </div>
+                  <button
+                    className="tl-fp-close-btn"
+                    onClick={() => removeExploration(exp.id)}
+                    style={{ position: "absolute", top: "16px", right: "20px", background: "none", border: "none", fontSize: "16px", color: "#a68b73", cursor: "pointer", padding: "4px" }}
+                  >✕</button>
                 </div>
 
                 {/* User question quote + Explanation — always visible */}
-                <div className="tl-fp-section tl-fp-section--explanation">
-                  {userQuestion && (
-                    <p className="tl-user-question-quote">"{userQuestion}"</p>
+                <div className="tl-fp-section tl-fp-section--explanation" style={{ background: "#fff" }}>
+                  {exp.userQuestion && (
+                    <p className="tl-user-question-quote">"{exp.userQuestion}"</p>
                   )}
-                  {explorationLoading && !exploration && (
+                  {exp.loading && !exp.result && (
                     <div className="tl-exploration-loading" style={{ padding: "16px 24px" }}>
                       <div className="tl-spinner" />
                       <span>Analyzing…</span>
                     </div>
                   )}
-                  {exploration && exploration.explanation && (
-                    <p className="tl-exploration-explanation">{exploration.explanation}</p>
+                  {exp.result && exp.result.explanation && (
+                    <p className="tl-exploration-explanation">{exp.result.explanation}</p>
                   )}
                 </div>
 
-                {/* Back-translation — always shown */}
+                {/* Back-translation — expandable */}
                 <div className="tl-fp-section tl-fp-section--bt">
-                  <div className="tl-fp-section-header">
+                  <div
+                    className="tl-fp-section-header tl-fp-section-header--clickable"
+                    onClick={() => toggleSection(exp.id, "bt")}
+                  >
                     <span className="tl-fp-section-icon">↩</span>
                     <span className="tl-fp-section-title">Back-translation</span>
+                    <span className={`tl-chevron ${exp.expandedSections.has("bt") ? "tl-chevron--open" : ""}`}>▸</span>
                   </div>
-                  <div className="tl-fp-section-body">
-                    <p className="tl-fp-bt-text">{segments[selectedPhrase.segIdx].backTranslation}</p>
-                  </div>
+                  {exp.expandedSections.has("bt") && (
+                    <div className="tl-fp-section-body">
+                      <p className="tl-fp-bt-text">{segments[exp.segIdx].backTranslation}</p>
+                    </div>
+                  )}
                 </div>
 
                 {/* See alternatives — expandable, hidden if empty */}
-                {(!exploration || exploration.alternatives.length > 0) && (
-                  <div className="tl-fp-section">
+                {(!exp.result || exp.result.alternatives.length > 0) && (
+                  <div className="tl-fp-section" style={{ background: "#fff" }}>
                     <div
                       className="tl-fp-section-header tl-fp-section-header--clickable"
-                      onClick={() => toggleSection("alternatives")}
+                      onClick={() => toggleSection(exp.id, "alternatives")}
                     >
                       <span className="tl-fp-section-icon">↔</span>
                       <span className="tl-fp-section-title">See alternatives</span>
-                      <span className={`tl-chevron ${expandedSections.has("alternatives") ? "tl-chevron--open" : ""}`}>▸</span>
+                      <span className={`tl-chevron ${exp.expandedSections.has("alternatives") ? "tl-chevron--open" : ""}`}>▸</span>
                     </div>
-                    {expandedSections.has("alternatives") && (
+                    {exp.expandedSections.has("alternatives") && (
                       <div className="tl-fp-section-body">
-                        {explorationLoading && !exploration && (
+                        {exp.loading && !exp.result && (
                           <div className="tl-exploration-loading">
                             <div className="tl-spinner" />
                             <span>Loading alternatives…</span>
                           </div>
                         )}
-                        {exploration && exploration.alternatives.map((alt, i) => (
-                          <div key={i} className="tl-alt-card">
-                            <div className="tl-alt-korean">{alt.korean}</div>
-                            <div className="tl-alt-english">{alt.english}</div>
-                            <div className="tl-alt-nuance">{alt.nuanceDiff}</div>
-                            <button
-                              className="tl-alt-use-btn"
-                              onClick={() => handleReplaceSegment(alt.korean)}
-                            >
-                              Use this ↵
-                            </button>
-                          </div>
-                        ))}
+                        {exp.result && exp.result.alternatives.map((alt, i) => {
+                          const cleanedAlt = alt.korean.replace(/^[.\s]+/, '').replace(/[.\s]+$/, '');
+                          return (
+                            <div key={i} className="tl-alt-card">
+                              <div className="tl-alt-korean">{cleanedAlt}</div>
+                              <div className="tl-alt-english">{alt.english}</div>
+                              <div className="tl-alt-nuance">{alt.nuanceDiff}</div>
+                              <button
+                                className="tl-alt-use-btn"
+                                onClick={() => handleReplaceSegment(exp.id, exp.segIdx, exp.text, cleanedAlt)}
+                              >
+                                Use this ↵
+                              </button>
+                            </div>
+                          );
+                        })}
                       </div>
                     )}
                   </div>
                 )}
 
                 {/* See grammar pattern — expandable, hidden if empty */}
-                {(!exploration || exploration.grammarPatterns.length > 0) && (
-                  <div className="tl-fp-section">
+                {(!exp.result || exp.result.grammarPatterns.length > 0) && (
+                  <div className="tl-fp-section" style={{ background: "#fff" }}>
                     <div
                       className="tl-fp-section-header tl-fp-section-header--clickable"
-                      onClick={() => toggleSection("grammar")}
+                      onClick={() => toggleSection(exp.id, "grammar")}
                     >
                       <span className="tl-fp-section-icon">≡</span>
                       <span className="tl-fp-section-title">See grammar pattern</span>
-                      <span className={`tl-chevron ${expandedSections.has("grammar") ? "tl-chevron--open" : ""}`}>▸</span>
+                      <span className={`tl-chevron ${exp.expandedSections.has("grammar") ? "tl-chevron--open" : ""}`}>▸</span>
                     </div>
-                    {expandedSections.has("grammar") && (
+                    {exp.expandedSections.has("grammar") && (
                       <div className="tl-fp-section-body">
-                        {explorationLoading && !exploration && (
+                        {exp.loading && !exp.result && (
                           <div className="tl-exploration-loading">
                             <div className="tl-spinner" />
                             <span>Loading grammar…</span>
                           </div>
                         )}
-                        {exploration && exploration.grammarPatterns.map((pat, i) => (
+                        {exp.result && exp.result.grammarPatterns.map((pat, i) => (
                           <div key={i} className="tl-pattern-card">
                             <div className="tl-pattern-name">{pat.pattern}</div>
                             <div className="tl-pattern-desc">{pat.description}</div>
@@ -934,27 +988,27 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
                 )}
 
                 {/* See cultural context — expandable, hidden if empty */}
-                {(!exploration || exploration.culturalContext !== "") && (
-                  <div className="tl-fp-section">
+                {(!exp.result || exp.result.culturalContext !== "") && (
+                  <div className="tl-fp-section" style={{ background: "#fff" }}>
                     <div
                       className="tl-fp-section-header tl-fp-section-header--clickable"
-                      onClick={() => toggleSection("cultural")}
+                      onClick={() => toggleSection(exp.id, "cultural")}
                     >
                       <span className="tl-fp-section-icon">∞</span>
                       <span className="tl-fp-section-title">See cultural context</span>
-                      <span className={`tl-chevron ${expandedSections.has("cultural") ? "tl-chevron--open" : ""}`}>▸</span>
+                      <span className={`tl-chevron ${exp.expandedSections.has("cultural") ? "tl-chevron--open" : ""}`}>▸</span>
                     </div>
-                    {expandedSections.has("cultural") && (
+                    {exp.expandedSections.has("cultural") && (
                       <div className="tl-fp-section-body">
-                        {explorationLoading && !exploration && (
+                        {exp.loading && !exp.result && (
                           <div className="tl-exploration-loading">
                             <div className="tl-spinner" />
                             <span>Loading context…</span>
                           </div>
                         )}
-                        {exploration && (
+                        {exp.result && (
                           <p className="tl-fp-cultural-text">
-                            {exploration.culturalContext}
+                            {exp.result.culturalContext}
                           </p>
                         )}
                       </div>
@@ -962,7 +1016,7 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
                   </div>
                 )}
               </div>
-            )}
+            ))}
           </div>
         )}
 
