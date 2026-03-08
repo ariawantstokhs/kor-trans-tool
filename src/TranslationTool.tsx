@@ -110,7 +110,7 @@ Respond ONLY with valid JSON matching this shape:
         }
       ],
       "communicative_function": "<short label for what this sentence does, e.g. Greeting, Self-introduction, Purpose statement, Credential presentation, Closing & gratitude>",
-      "norm_alignment": "<OPTIONAL — include ONLY when there is a noteworthy Korean convention at play. 1-2 sentences explaining WHY the translation is worded this way, so the user learns the convention. Write as if coaching the user: 'In Korean professional emails, X is typically done by Y — that's why this sentence uses Z (Korean expression).' Keep in English. Omit entirely if no meaningful convention applies.>"
+      "norm_alignment": "<OPTIONAL — include ONLY when there is a noteworthy Korean convention at play. 1-2 sentences describing the convention as it actually exists in Korean professional communication. Write as if coaching the user: 'In Korean professional emails, X is typically done by Y — so expressions like Z (Korean expression) are standard here.' Do NOT explain why the translation chose specific words. If the translation uses a non-standard expression, describe what is conventionally used instead. Keep in English. Omit entirely if no meaningful convention applies.>"
     }
   ]
 }
@@ -121,7 +121,7 @@ Rules:
 - back_translation: translate each Korean sentence back to English independently.
 - tokens: break each Korean sentence into key words/morphemes with romanization, meaning, and part-of-speech.
 - communicative_function: REQUIRED for every segment. A short plain-English label describing the rhetorical role of this sentence in the writing (e.g. "Greeting", "Request", "Closing & gratitude").
-- norm_alignment: OPTIONAL. Include ONLY when there is a noteworthy Korean convention at play. Explain WHY the translation is written this way so the user understands the convention and can apply it themselves next time. Be specific and actionable — e.g. "In Korean business emails, it's common to state your affiliation before your request — that's why this uses 소속 (affiliation) before the main ask." Do NOT give generic advice like "use polite language". Include relevant Korean expressions in parentheses. Do NOT evaluate or judge the translation.
+- norm_alignment: OPTIONAL. Include ONLY when there is a noteworthy Korean convention at play. Describe the convention as it actually exists in Korean professional communication — what expressions are conventionally used, what is standard practice, and why. Be specific and actionable — e.g. "In Korean business emails, it's common to state your affiliation before your request — that's why structures like 소속 (affiliation) followed by the main ask are standard." Include relevant Korean expressions in parentheses. Do NOT give generic advice like "use polite language". Do NOT evaluate, judge, defend, or rationalize the translation's specific word choices. If the translation uses a non-standard expression, describe what is conventionally used — do not explain why the translation's choice is acceptable.
 - Do NOT generate a document-level or email-level situation briefing. All situational information must be at the sentence level.
 - No markdown, no prose, pure JSON only.`;
 
