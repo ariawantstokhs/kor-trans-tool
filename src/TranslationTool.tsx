@@ -631,18 +631,17 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
         </div>
 
         {/* Dev toggle */}
+        {/* Dev toggle */}
         <div className="tl-dev-toggle">
-          <span className="tl-dev-label">DEV</span>
           {levels.map((l) => (
             <button
               key={l}
               onClick={() => onChangeLevel(l)}
               className={`tl-level-btn ${level === l ? "tl-level-btn--active" : ""}`}
             >
-              {l.charAt(0).toUpperCase() + l.slice(1)}
+              {l === "low" ? "A" : "B"}
             </button>
           ))}
-          <span className="tl-dev-suffix">proficiency</span>
         </div>
 
 
@@ -651,10 +650,10 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
       {/* ── Content ── */}
       <div className={`tl-content ${level === "mid" || (level === "low" && lowModeStep === "input") ? "tl-content--split" : "tl-content--single"}`}>
 
-        {/* ── Mid mode: Landing input (before translation) ── */}
-        {level === "mid" && !result && !loading && (
+        {/* ── Unified Landing input (before translation) ── */}
+        {!result && !loading && (level === "mid" || lowModeStep === "input") && (
           <div className="tl-left">
-            <div className="tl-card">
+            <div className="tl-card tl-card--fill">
               <label className="tl-label">English Input</label>
 
               <textarea
@@ -680,42 +679,13 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
           </div>
         )}
 
-        {/* ── Mid mode: Loading state ── */}
-        {level === "mid" && !result && loading && (
+        {/* ── Unified Loading state ── */}
+        {!result && loading && (level === "mid" || lowModeStep === "input") && (
           <div className="tl-left">
-            <div className="tl-card">
-              <div className="tl-exploration-loading" style={{ padding: "40px 24px", justifyContent: "center" }}>
+            <div className="tl-card tl-card--fill">
+              <div className="tl-exploration-loading" style={{ padding: "40px 24px", justifyContent: "center", height: "100%" }}>
                 <div className="tl-spinner" />
                 <span>Translating…</span>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* ── Low mode: Input area ── */}
-        {level === "low" && lowModeStep === "input" && (
-          <div className="tl-left">
-            <div className="tl-card">
-              <label className="tl-label">English Input</label>
-
-              <textarea
-                ref={textareaRef}
-                value={inputText}
-                onChange={(e) => setInputText(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handleTranslate(); }}
-                placeholder="Type a professional message to translate…"
-                rows={4}
-                className="tl-textarea"
-              />
-              <div className="tl-input-footer">
-                <span className="tl-hint">Ctrl+Enter to translate</span>
-                <button
-                  onClick={handleTranslate}
-                  disabled={loading || !inputText.trim()}
-                  className="tl-translate-btn"
-                >
-                  {loading ? "Translating…" : "Translate ↵"}
-                </button>
               </div>
             </div>
           </div>
@@ -788,21 +758,6 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
                           return elements.map((el, idx) => React.isValidElement(el) ? React.cloneElement(el as React.ReactElement, { key: idx }) : el);
                         })()}
                       </div>
-                      <div className="tl-bt-row">
-                        <button
-                          className="tl-bt-toggle"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setShowBT((prev) => ({ ...prev, [i]: !prev[i] }));
-                          }}
-                          title="Show back-translation"
-                        >
-                          ↩
-                        </button>
-                      </div>
-                      {showBT[i] && (
-                        <div className="tl-bt-inline">{seg.backTranslation}</div>
-                      )}
                     </div>
                   </div>
                 ))}
@@ -848,16 +803,9 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
         )}
 
         {/* ──────── Right panel: Mid mode ──────── */}
-        {level === "mid" && (
+        {level === "mid" && result && (
           <div className="tl-right">
-            {!result && (
-              <div className="tl-empty-state">
-                <div className="tl-empty-icon">↵</div>
-                <div>Translate text to explore features</div>
-              </div>
-            )}
-
-            {result && activeExplorations.length === 0 && (
+            {activeExplorations.length === 0 && (
               <div className="tl-empty-state">
                 <div className="tl-empty-icon">←</div>
                 <div>Select a Korean word to explore it</div>
