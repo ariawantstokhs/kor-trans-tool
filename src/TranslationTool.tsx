@@ -48,6 +48,7 @@ interface ReusablePattern {
 }
 
 interface ExplorationResult {
+  explanation: string;
   alternatives: AlternativeExpression[];
   grammarPatterns: ReusablePattern[];
   culturalContext: string;
@@ -212,11 +213,56 @@ async function fetchExploration(
   tappedExpression: string,
   fullKoreanSentence: string,
   backTranslation: string,
-  originalEnglish: string
+  originalEnglish: string,
+  userQuestion: string | null
 ): Promise<ExplorationResult> {
-  const systemPrompt = `You are a Korean language tutor. The user selected a specific word or phrase in the Korean translation to learn more.
+  let systemPrompt: string;
+  let userMessage: string;
+
+  if (userQuestion) {
+    // Branch A — Tailored mode
+    systemPrompt = `You are a helpful Korean language tutor.
+The user selected a specific expression from a Korean translation and has a specific question about it.
+
+Context:
+Original English: "${originalEnglish}"
+Korean Translation: "${fullKoreanSentence}"
+Back-translation: "${backTranslation}"
+Selected expression: "${tappedExpression}"
+User's question: "${userQuestion}"
+
 Respond ONLY with valid JSON:
 {
+  "explanation": "A clear, focused 2-3 sentence answer to the user's specific question about this expression.",
+  "alternatives": [
+    {
+      "korean": "<alternative expression>",
+      "english": "<english translation>",
+      "formality": "more formal|similar|more casual",
+      "nuance_diff": "<difference explanation>"
+    }
+  ],
+  "grammar_patterns": [
+    {
+      "pattern": "<reusable pattern>",
+      "description": "<when to use>",
+      "examples": ["<ex1>", "<ex2>"]
+    }
+  ],
+  "cultural_context": "<1-2 sentences, only if relevant to the question>"
+}
+
+STRICT RULES:
+- "explanation" is the PRIMARY field. Answer the user's question directly and thoroughly.
+- Only include alternatives, grammar_patterns, cultural_context if they are relevant to the user's question. If not relevant, return empty array [] or empty string "".
+- All explanations in English. No markdown, pure JSON only.`;
+    userMessage = "Explore this expression.";
+  } else {
+    // Branch B — General mode
+    systemPrompt = `You are a Korean language tutor. The user selected a specific word or phrase in the Korean translation to learn more.
+Respond ONLY with valid JSON:
+{
+  "explanation": "A clear 1-2 sentence overview of what this expression means and why it was used in this context.",
   "alternatives": [
     {
       "korean": "<alternative Korean expression>",
@@ -236,21 +282,24 @@ Respond ONLY with valid JSON:
 }
 
 Rules:
+- "explanation" gives a concise overview first. The rest of the fields provide detailed drill-down.
 - Focus your analysis on the selected expression within its sentence context.
 - alternatives: 2-3 alternative ways to express the same idea with different formality/nuance. Present as OPTIONS, not corrections.
 - grammar_patterns: 1-2 reusable grammar patterns from this expression with examples.
 - cultural_context: expression-specific cultural norm (formality, honorifics, social appropriateness).
 - All explanations in English. No markdown, pure JSON only.`;
 
-  const userMessage = `Selected expression: "${tappedExpression}"
+    userMessage = `Selected expression: "${tappedExpression}"
 Full Korean sentence: "${fullKoreanSentence}"
 Back-translation: "${backTranslation}"
 Original English: "${originalEnglish}"`;
+  }
 
   const raw = await callOpenAI(systemPrompt, userMessage);
   try {
     const parsed = JSON.parse(raw.replace(/```json|```/g, "").trim());
     return {
+      explanation: parsed.explanation || "",
       alternatives: (parsed.alternatives || []).map((a: any) => ({
         korean: a.korean || "",
         english: a.english || "",
@@ -265,7 +314,7 @@ Original English: "${originalEnglish}"`;
       culturalContext: parsed.cultural_context || "",
     };
   } catch {
-    return { alternatives: [], grammarPatterns: [], culturalContext: raw };
+    return { explanation: "", alternatives: [], grammarPatterns: [], culturalContext: raw };
   }
 }
 
@@ -311,6 +360,8 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set());
   const [showBT, setShowBT] = useState<Record<number, boolean>>({});
   const [selectionPopup, setSelectionPopup] = useState<{ text: string; segIdx: number; x: number; y: number } | null>(null);
+  const [popupQuestion, setPopupQuestion] = useState("");
+  const [userQuestion, setUserQuestion] = useState<string | null>(null);
 
   // Low slide view state
   const [lowModeStep, setLowModeStep] = useState<LowModeStep>('input');
@@ -383,19 +434,25 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
 
   const handleExploreSelection = () => {
     if (!selectionPopup) return;
+    const question = popupQuestion.trim() || null;
     setSelectedPhrase({ text: selectionPopup.text, segIdx: selectionPopup.segIdx });
+    setUserQuestion(question);
     setExploration(null);
     setExpandedSections(new Set());
     setSelectionPopup(null);
+    setPopupQuestion("");
     window.getSelection()?.removeAllRanges();
     // Auto-fetch exploration
     const seg = segments[selectionPopup.segIdx];
+    const mode = question ? "tailored" : "general";
+    setInteractionLog((prev) => [...prev, { segIdx: selectionPopup.segIdx, action: "exploration_opened", userQuestion: question, mode, timestamp: Date.now() }]);
     setExplorationLoading(true);
     fetchExploration(
       selectionPopup.text,
       seg.korean,
       seg.backTranslation,
-      seg.originalEnglish || inputText
+      seg.originalEnglish || inputText,
+      question
     ).then((res) => {
       setExploration(res);
     }).finally(() => {
@@ -406,14 +463,16 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
   const handleFetchExploration = async () => {
     if (!selectedPhrase || !result) return;
     const seg = segments[selectedPhrase.segIdx];
-    setInteractionLog((prev) => [...prev, { segIdx: selectedPhrase.segIdx, action: "exploration_opened", timestamp: Date.now() }]);
+    const mode = userQuestion ? "tailored" : "general";
+    setInteractionLog((prev) => [...prev, { segIdx: selectedPhrase.segIdx, action: "exploration_opened", userQuestion, mode, timestamp: Date.now() }]);
     setExplorationLoading(true);
     try {
       const res = await fetchExploration(
         selectedPhrase.text,
         seg.korean,
         seg.backTranslation,
-        seg.originalEnglish || inputText
+        seg.originalEnglish || inputText,
+        userQuestion
       );
       setExploration(res);
     } finally {
@@ -446,6 +505,7 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
       next[idx] = { ...next[idx], korean: oldKorean.replace(selectedPhrase.text, altKorean) };
       return next;
     });
+    setSelectedPhrase({ ...selectedPhrase, text: altKorean });
   };
 
   const toggleReview = useCallback((idx: number) => {
@@ -562,14 +622,13 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
       </header>
 
       {/* ── Content ── */}
-      <div className={`tl-content ${level === "mid" || lowModeStep === "input" ? "tl-content--split" : "tl-content--single"}`}>
+      <div className={`tl-content ${level === "mid" || (level === "low" && lowModeStep === "input") ? "tl-content--split" : "tl-content--single"}`}>
 
-        {/* ── Input area + output (left panel) ── */}
-        {(level === "mid" || lowModeStep === "input") && (
+        {/* ── Mid mode: Landing input (before translation) ── */}
+        {level === "mid" && !result && !loading && (
           <div className="tl-left">
             <div className="tl-card">
               <label className="tl-label">English Input</label>
-
 
               <textarea
                 ref={textareaRef}
@@ -591,92 +650,162 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
                 </button>
               </div>
             </div>
+          </div>
+        )}
 
-            {/* ──────── MID MODE — Left panel: Korean segments (select text to explore) ──────── */}
-            {level === "mid" && result && (
-              <div className="tl-card">
+        {/* ── Mid mode: Loading state ── */}
+        {level === "mid" && !result && loading && (
+          <div className="tl-left">
+            <div className="tl-card">
+              <div className="tl-exploration-loading" style={{ padding: "40px 24px", justifyContent: "center" }}>
+                <div className="tl-spinner" />
+                <span>Translating…</span>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── Low mode: Input area ── */}
+        {level === "low" && lowModeStep === "input" && (
+          <div className="tl-left">
+            <div className="tl-card">
+              <label className="tl-label">English Input</label>
+
+              <textarea
+                ref={textareaRef}
+                value={inputText}
+                onChange={(e) => setInputText(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handleTranslate(); }}
+                placeholder="Type a professional message to translate…"
+                rows={4}
+                className="tl-textarea"
+              />
+              <div className="tl-input-footer">
+                <span className="tl-hint">Ctrl+Enter to translate</span>
+                <button
+                  onClick={handleTranslate}
+                  disabled={loading || !inputText.trim()}
+                  className="tl-translate-btn"
+                >
+                  {loading ? "Translating…" : "Translate ↵"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ──────── MID MODE — Left panel: Korean segments (after translation) ──────── */}
+        {level === "mid" && result && (
+          <div className="tl-left">
+            <div className="tl-card">
+              <div className="tl-mid-header-row">
                 <label className="tl-label">
                   Korean Translation
                   <span className="tl-label-hint"> — select a word to explore</span>
                 </label>
-                <div className="tl-sentences" ref={sentencesRef} onMouseUp={handleTextSelection}>
-                  {segments.map((seg, i) => (
-                    <div key={i} className="tl-segment-wrapper">
-                      <button
-                        className={`tl-review-icon-btn ${reviewedSegments.has(i) ? "tl-review-icon-btn--checked" : ""}`}
-                        onClick={() => toggleReview(i)}
-                        aria-label={reviewedSegments.has(i) ? "Unmark as reviewed" : "Mark as reviewed"}
-                      >
-                        <span className="tl-review-icon" />
-                      </button>
-                      <div
-                        className="tl-sentence"
-                        data-seg-idx={i}
-                      >
-                        <div className="tl-korean tl-korean--selectable">
-                          {selectedPhrase && selectedPhrase.segIdx === i && seg.korean.includes(selectedPhrase.text) ? (
-                            (() => {
-                              const idx = seg.korean.indexOf(selectedPhrase.text);
-                              return (
-                                <>
-                                  {seg.korean.slice(0, idx)}
-                                  <mark className="tl-highlight">{selectedPhrase.text}</mark>
-                                  {seg.korean.slice(idx + selectedPhrase.text.length)}
-                                </>
-                              );
-                            })()
-                          ) : (
-                            seg.korean
-                          )}
-                        </div>
-                        <div className="tl-bt-row">
-                          <button
-                            className="tl-bt-toggle"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setShowBT((prev) => ({ ...prev, [i]: !prev[i] }));
-                            }}
-                            title="Show back-translation"
-                          >
-                            ↩
-                          </button>
-                        </div>
-                        {showBT[i] && (
-                          <div className="tl-bt-inline">{seg.backTranslation}</div>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-
-                {/* Floating selection popup */}
-                {selectionPopup && (
-                  <div
-                    className="tl-selection-popup"
-                    style={{
-                      position: "fixed",
-                      left: selectionPopup.x,
-                      top: selectionPopup.y,
-                      transform: "translate(-50%, -100%)",
-                    }}
-                  >
-                    <button className="tl-selection-popup-btn" onClick={handleExploreSelection}>
-                      Explore ▸
-                    </button>
-                  </div>
-                )}
-
-                {/* Readiness bar */}
-                <div className="tl-readiness-bar">
-                  <span className="tl-readiness-text">
-                    Reviewed {reviewedSegments.size} of {segments.length} segments
-                  </span>
-                  {reviewedSegments.size === segments.length && segments.length > 0 && (
-                    <button className="tl-send-btn" onClick={handleSendReady}>Ready to send</button>
-                  )}
-                </div>
+                <button
+                  className="tl-edit-input-btn"
+                  onClick={() => {
+                    setResult(null);
+                    setSegments([]);
+                    setSelectedPhrase(null);
+                    setExploration(null);
+                  }}
+                  title="Edit English input"
+                >
+                  ✎ Edit input
+                </button>
               </div>
-            )}
+              <div className="tl-sentences" ref={sentencesRef} onMouseUp={handleTextSelection}>
+                {segments.map((seg, i) => (
+                  <div key={i} className="tl-segment-wrapper">
+                    <button
+                      className={`tl-review-icon-btn ${reviewedSegments.has(i) ? "tl-review-icon-btn--checked" : ""}`}
+                      onClick={() => toggleReview(i)}
+                      aria-label={reviewedSegments.has(i) ? "Unmark as reviewed" : "Mark as reviewed"}
+                    >
+                      <span className="tl-review-icon" />
+                    </button>
+                    <div
+                      className="tl-sentence"
+                      data-seg-idx={i}
+                    >
+                      <div className="tl-korean tl-korean--selectable">
+                        {(() => {
+                          const hl = selectedPhrase && selectedPhrase.segIdx === i && seg.korean.includes(selectedPhrase.text)
+                            ? selectedPhrase
+                            : selectionPopup && selectionPopup.segIdx === i && seg.korean.includes(selectionPopup.text)
+                              ? selectionPopup
+                              : null;
+                          if (hl) {
+                            const idx = seg.korean.indexOf(hl.text);
+                            return (
+                              <>
+                                {seg.korean.slice(0, idx)}
+                                <mark className="tl-highlight">{hl.text}</mark>
+                                {seg.korean.slice(idx + hl.text.length)}
+                              </>
+                            );
+                          }
+                          return seg.korean;
+                        })()}
+                      </div>
+                      <div className="tl-bt-row">
+                        <button
+                          className="tl-bt-toggle"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setShowBT((prev) => ({ ...prev, [i]: !prev[i] }));
+                          }}
+                          title="Show back-translation"
+                        >
+                          ↩
+                        </button>
+                      </div>
+                      {showBT[i] && (
+                        <div className="tl-bt-inline">{seg.backTranslation}</div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Floating selection popup */}
+              {selectionPopup && (
+                <div
+                  className="tl-selection-popup"
+                  style={{
+                    position: "fixed",
+                    left: selectionPopup.x,
+                    top: selectionPopup.y,
+                    transform: "translate(-50%, -100%)",
+                  }}
+                  onMouseDown={(e) => { if ((e.target as HTMLElement).tagName !== "INPUT") e.preventDefault(); }}
+                >
+                  <input
+                    className="tl-selection-popup-input"
+                    type="text"
+                    placeholder="Ask anything, or just explore"
+                    value={popupQuestion}
+                    onChange={(e) => setPopupQuestion(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") handleExploreSelection(); }}
+                  />
+                  <button className="tl-selection-popup-btn" onClick={handleExploreSelection}>
+                    Explore ▸
+                  </button>
+                </div>
+              )}
+
+              {/* Readiness bar */}
+              <div className="tl-readiness-bar">
+                <span className="tl-readiness-text">
+                  Reviewed {reviewedSegments.size} of {segments.length} segments
+                </span>
+                {reviewedSegments.size === segments.length && segments.length > 0 && (
+                  <button className="tl-send-btn" onClick={handleSendReady}>Ready to send</button>
+                )}
+              </div>
+            </div>
           </div>
         )}
 
@@ -705,6 +834,22 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
                   <span className="tl-phrase-header-text">{selectedPhrase.text}</span>
                 </div>
 
+                {/* User question quote + Explanation — always visible */}
+                <div className="tl-fp-section tl-fp-section--explanation">
+                  {userQuestion && (
+                    <p className="tl-user-question-quote">"{userQuestion}"</p>
+                  )}
+                  {explorationLoading && !exploration && (
+                    <div className="tl-exploration-loading" style={{ padding: "16px 24px" }}>
+                      <div className="tl-spinner" />
+                      <span>Analyzing…</span>
+                    </div>
+                  )}
+                  {exploration && exploration.explanation && (
+                    <p className="tl-exploration-explanation">{exploration.explanation}</p>
+                  )}
+                </div>
+
                 {/* Back-translation — always shown */}
                 <div className="tl-fp-section tl-fp-section--bt">
                   <div className="tl-fp-section-header">
@@ -716,111 +861,106 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
                   </div>
                 </div>
 
-                {/* See alternatives — expandable */}
-                <div className="tl-fp-section">
-                  <div
-                    className="tl-fp-section-header tl-fp-section-header--clickable"
-                    onClick={() => toggleSection("alternatives")}
-                  >
-                    <span className="tl-fp-section-icon">↔</span>
-                    <span className="tl-fp-section-title">See alternatives</span>
-                    <span className={`tl-chevron ${expandedSections.has("alternatives") ? "tl-chevron--open" : ""}`}>▸</span>
-                  </div>
-                  {expandedSections.has("alternatives") && (
-                    <div className="tl-fp-section-body">
-                      {explorationLoading && !exploration && (
-                        <div className="tl-exploration-loading">
-                          <div className="tl-spinner" />
-                          <span>Loading alternatives…</span>
-                        </div>
-                      )}
-                      {exploration && exploration.alternatives.map((alt, i) => (
-                        <div key={i} className="tl-alt-card">
-                          <div className="tl-alt-top">
-                            <span className="tl-alt-korean">{alt.korean}</span>
-                            <span className={`tl-formality-badge tl-formality--${alt.formality.replace(/\s+/g, "-")}`}>
-                              {alt.formality}
-                            </span>
+                {/* See alternatives — expandable, hidden if empty */}
+                {(!exploration || exploration.alternatives.length > 0) && (
+                  <div className="tl-fp-section">
+                    <div
+                      className="tl-fp-section-header tl-fp-section-header--clickable"
+                      onClick={() => toggleSection("alternatives")}
+                    >
+                      <span className="tl-fp-section-icon">↔</span>
+                      <span className="tl-fp-section-title">See alternatives</span>
+                      <span className={`tl-chevron ${expandedSections.has("alternatives") ? "tl-chevron--open" : ""}`}>▸</span>
+                    </div>
+                    {expandedSections.has("alternatives") && (
+                      <div className="tl-fp-section-body">
+                        {explorationLoading && !exploration && (
+                          <div className="tl-exploration-loading">
+                            <div className="tl-spinner" />
+                            <span>Loading alternatives…</span>
                           </div>
-                          <div className="tl-alt-english">{alt.english}</div>
-                          <div className="tl-alt-nuance">{alt.nuanceDiff}</div>
-                          <button
-                            className="tl-alt-use-btn"
-                            onClick={() => handleReplaceSegment(alt.korean)}
-                          >
-                            Use this ↵
-                          </button>
-                        </div>
-                      ))}
-                      {exploration && exploration.alternatives.length === 0 && (
-                        <p className="tl-placeholder">No alternatives available.</p>
-                      )}
-                    </div>
-                  )}
-                </div>
-
-                {/* See grammar pattern — expandable */}
-                <div className="tl-fp-section">
-                  <div
-                    className="tl-fp-section-header tl-fp-section-header--clickable"
-                    onClick={() => toggleSection("grammar")}
-                  >
-                    <span className="tl-fp-section-icon">≡</span>
-                    <span className="tl-fp-section-title">See grammar pattern</span>
-                    <span className={`tl-chevron ${expandedSections.has("grammar") ? "tl-chevron--open" : ""}`}>▸</span>
-                  </div>
-                  {expandedSections.has("grammar") && (
-                    <div className="tl-fp-section-body">
-                      {explorationLoading && !exploration && (
-                        <div className="tl-exploration-loading">
-                          <div className="tl-spinner" />
-                          <span>Loading grammar…</span>
-                        </div>
-                      )}
-                      {exploration && exploration.grammarPatterns.map((pat, i) => (
-                        <div key={i} className="tl-pattern-card">
-                          <div className="tl-pattern-name">{pat.pattern}</div>
-                          <div className="tl-pattern-desc">{pat.description}</div>
-                          <div className="tl-pattern-examples">
-                            {pat.examples.map((ex, j) => (
-                              <div key={j} className="tl-pattern-example">• {ex}</div>
-                            ))}
+                        )}
+                        {exploration && exploration.alternatives.map((alt, i) => (
+                          <div key={i} className="tl-alt-card">
+                            <div className="tl-alt-korean">{alt.korean}</div>
+                            <div className="tl-alt-english">{alt.english}</div>
+                            <div className="tl-alt-nuance">{alt.nuanceDiff}</div>
+                            <button
+                              className="tl-alt-use-btn"
+                              onClick={() => handleReplaceSegment(alt.korean)}
+                            >
+                              Use this ↵
+                            </button>
                           </div>
-                        </div>
-                      ))}
-                      {exploration && exploration.grammarPatterns.length === 0 && (
-                        <p className="tl-placeholder">No grammar patterns identified.</p>
-                      )}
-                    </div>
-                  )}
-                </div>
-
-                {/* See cultural context — expandable */}
-                <div className="tl-fp-section">
-                  <div
-                    className="tl-fp-section-header tl-fp-section-header--clickable"
-                    onClick={() => toggleSection("cultural")}
-                  >
-                    <span className="tl-fp-section-icon">∞</span>
-                    <span className="tl-fp-section-title">See cultural context</span>
-                    <span className={`tl-chevron ${expandedSections.has("cultural") ? "tl-chevron--open" : ""}`}>▸</span>
+                        ))}
+                      </div>
+                    )}
                   </div>
-                  {expandedSections.has("cultural") && (
-                    <div className="tl-fp-section-body">
-                      {explorationLoading && !exploration && (
-                        <div className="tl-exploration-loading">
-                          <div className="tl-spinner" />
-                          <span>Loading context…</span>
-                        </div>
-                      )}
-                      {exploration && (
-                        <p className="tl-fp-cultural-text">
-                          {exploration.culturalContext || "No specific cultural notes for this expression."}
-                        </p>
-                      )}
+                )}
+
+                {/* See grammar pattern — expandable, hidden if empty */}
+                {(!exploration || exploration.grammarPatterns.length > 0) && (
+                  <div className="tl-fp-section">
+                    <div
+                      className="tl-fp-section-header tl-fp-section-header--clickable"
+                      onClick={() => toggleSection("grammar")}
+                    >
+                      <span className="tl-fp-section-icon">≡</span>
+                      <span className="tl-fp-section-title">See grammar pattern</span>
+                      <span className={`tl-chevron ${expandedSections.has("grammar") ? "tl-chevron--open" : ""}`}>▸</span>
                     </div>
-                  )}
-                </div>
+                    {expandedSections.has("grammar") && (
+                      <div className="tl-fp-section-body">
+                        {explorationLoading && !exploration && (
+                          <div className="tl-exploration-loading">
+                            <div className="tl-spinner" />
+                            <span>Loading grammar…</span>
+                          </div>
+                        )}
+                        {exploration && exploration.grammarPatterns.map((pat, i) => (
+                          <div key={i} className="tl-pattern-card">
+                            <div className="tl-pattern-name">{pat.pattern}</div>
+                            <div className="tl-pattern-desc">{pat.description}</div>
+                            <div className="tl-pattern-examples">
+                              {pat.examples.map((ex, j) => (
+                                <div key={j} className="tl-pattern-example">• {ex}</div>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* See cultural context — expandable, hidden if empty */}
+                {(!exploration || exploration.culturalContext !== "") && (
+                  <div className="tl-fp-section">
+                    <div
+                      className="tl-fp-section-header tl-fp-section-header--clickable"
+                      onClick={() => toggleSection("cultural")}
+                    >
+                      <span className="tl-fp-section-icon">∞</span>
+                      <span className="tl-fp-section-title">See cultural context</span>
+                      <span className={`tl-chevron ${expandedSections.has("cultural") ? "tl-chevron--open" : ""}`}>▸</span>
+                    </div>
+                    {expandedSections.has("cultural") && (
+                      <div className="tl-fp-section-body">
+                        {explorationLoading && !exploration && (
+                          <div className="tl-exploration-loading">
+                            <div className="tl-spinner" />
+                            <span>Loading context…</span>
+                          </div>
+                        )}
+                        {exploration && (
+                          <p className="tl-fp-cultural-text">
+                            {exploration.culturalContext}
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             )}
           </div>
