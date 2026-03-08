@@ -1,4 +1,4 @@
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useCallback } from "react";
 import { ProficiencyEngine, ProficiencyLevel, FeatureMode } from "./proficiencyEngine";
 import OpenAI from "openai";
 
@@ -17,23 +17,19 @@ interface SentenceSegment {
   korean: string;
   backTranslation: string;
   tokens: TokenData[];
+  communicativeFunction: string;
+  normAlignment?: string;
+  originalEnglish?: string;
 }
 
-interface BriefingNorm {
-  category: string;
-  description: string;
-  segmentIndices: number[];
-}
-
-interface SituationBriefing {
-  summary: string;
-  norms: BriefingNorm[];
+interface FollowUpQA {
+  question: string;
+  answer: string;
 }
 
 interface TranslationResult {
   koreanTranslation: string;
   segments: SentenceSegment[];
-  situationBriefing: SituationBriefing;
 }
 
 interface AlternativeExpression {
@@ -104,6 +100,7 @@ Respond ONLY with valid JSON matching this shape:
     {
       "korean": "<one Korean sentence>",
       "back_translation": "<English back-translation of that sentence>",
+      "original_english": "<the portion of the user's original English input that this Korean segment corresponds to>",
       "tokens": [
         {
           "text": "<Korean word/morpheme>",
@@ -111,27 +108,21 @@ Respond ONLY with valid JSON matching this shape:
           "meaning": "<English meaning>",
           "pos": "<part of speech>"
         }
-      ]
+      ],
+      "communicative_function": "<short label for what this sentence does, e.g. Greeting, Self-introduction, Purpose statement, Credential presentation, Closing & gratitude>",
+      "norm_alignment": "<OPTIONAL — include ONLY when there is a meaningful communicative norm. 1-2 sentences describing what is generally expected for this communicative function in this specific context. Include relevant Korean expressions parenthetically so the user can locate them. Keep explanation in English. Omit this field entirely if no meaningful norm applies.>"
     }
-  ],
-  "situation_briefing": {
-    "summary": "<1-2 sentence overview of communicative norms for this situation>",
-    "norms": [
-      {
-        "category": "<formality|greeting|closing|honorifics|cultural>",
-        "description": "<explanation of the norm in English>",
-        "segment_indices": [0, 1]
-      }
-    ]
-  }
+  ]
 }
 
 Rules:
 - Split the input into individual sentences. Translate each separately.
+- original_english: REQUIRED for every segment. The exact portion of the user's original English input that this Korean segment translates.
 - back_translation: translate each Korean sentence back to English independently.
 - tokens: break each Korean sentence into key words/morphemes with romanization, meaning, and part-of-speech.
-- situation_briefing: provide 3-5 norms. Each norm MUST be specific and actionable for THIS particular email — do NOT give generic advice like "use formal language" or "be polite". Instead, point out concrete choices made in the translation, e.g. "The verb ending ~드리겠습니다 in segment 2 signals deference to a superior; switching to ~하겠습니다 would be appropriate for a peer." Reference specific Korean expressions where possible. Each norm should reference which sentence indices it applies to via segment_indices.
-- Do NOT judge the translation quality. Only describe what is generally expected.
+- communicative_function: REQUIRED for every segment. A short plain-English label describing the rhetorical role of this sentence in the writing (e.g. "Greeting", "Request", "Closing & gratitude").
+- norm_alignment: OPTIONAL. Include ONLY when there is a meaningful communicative norm relevant to this segment in this specific context. Describe the norm, NOT the translation. Be specific to the situation — do NOT give generic advice like "use polite language". Describe the concrete communicative convention. Include relevant Korean expressions in parentheses. Do NOT evaluate, judge, or suggest edits to the translation.
+- Do NOT generate a document-level or email-level situation briefing. All situational information must be at the sentence level.
 - No markdown, no prose, pure JSON only.`;
 
   const raw = await callOpenAI(systemPrompt, `Translate this professional email to Korean:\n"${text}"`);
@@ -148,26 +139,45 @@ Rules:
           meaning: t.meaning || "",
           pos: t.pos || "",
         })),
+        communicativeFunction: s.communicative_function || "",
+        normAlignment: s.norm_alignment || undefined,
+        originalEnglish: s.original_english || undefined,
       })),
-      situationBriefing: {
-        summary: parsed.situation_briefing?.summary || "",
-        norms: (parsed.situation_briefing?.norms || []).map((n: any) => ({
-          category: n.category || "",
-          description: n.description || "",
-          segmentIndices: n.segment_indices || [],
-        })),
-      },
     };
   } catch {
     return {
       koreanTranslation: raw,
-      segments: [{ korean: raw, backTranslation: "(parsing error)", tokens: [] }],
-      situationBriefing: { summary: "", norms: [] },
+      segments: [{ korean: raw, backTranslation: "(parsing error)", tokens: [], communicativeFunction: "" }],
     };
   }
 }
 
-// ── Call 2: Exploration Data (Mid only, on-demand) ──
+// ── Call 2: Low Follow-Up (on-demand) ──
+
+async function fetchLowFollowUp(
+  segment: SentenceSegment,
+  userQuestion: string
+): Promise<string> {
+  const systemPrompt = `The user is reviewing a Korean translation and has asked a follow-up question about a specific segment. Answer their question using only the context below. Keep your answer in English, 2–3 sentences max.
+
+Rules:
+- Answer only what the user asked. Do not evaluate the translation or suggest edits.
+- If the question is about how something would be perceived by a Korean reader, describe the convention — do not say the translation is right or wrong.
+- Stay within this segment's scope. Do not comment on other parts of the translation.
+- No markdown formatting. Plain text only.`;
+
+  const userMessage = `Context:
+Original English: ${segment.originalEnglish || "(not available)"}
+Korean: ${segment.korean}
+Back-translation: ${segment.backTranslation}
+Communicative norm: ${segment.normAlignment || "(none)"}
+
+User's question: ${userQuestion}`;
+
+  return await callOpenAI(systemPrompt, userMessage);
+}
+
+// ── Call 3: Exploration Data (Mid only, on-demand) ──
 
 async function fetchExploration(
   koreanSegment: string,
@@ -250,31 +260,7 @@ const ModeBadge = ({ mode }: { mode: FeatureMode }) => {
   );
 };
 
-const CategoryLabel = ({ category }: { category: string }) => {
-  const colors: Record<string, string> = {
-    formality: "#6366f1",
-    honorifics: "#8b5cf6",
-    structure: "#2563eb",
-    cultural: "#d97706",
-    greeting: "#059669",
-    closing: "#0891b2",
-  };
-  const color = colors[category] || "#7b6a5c";
-  return (
-    <span style={{
-      fontSize: 9,
-      fontWeight: 700,
-      letterSpacing: "0.08em",
-      textTransform: "uppercase" as const,
-      color,
-      background: color + "12",
-      padding: "2px 7px",
-      borderRadius: 4,
-    }}>
-      {category}
-    </span>
-  );
-};
+
 
 
 
@@ -292,6 +278,16 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
   const [explorationLoading, setExplorationLoading] = useState(false);
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set());
 
+  // Low follow-up state
+  const [followUps, setFollowUps] = useState<Record<number, FollowUpQA[]>>({});
+  const [followUpLoading, setFollowUpLoading] = useState<Record<number, boolean>>({});
+  const [followUpInputs, setFollowUpInputs] = useState<Record<number, string>>({});
+  const [followUpOpen, setFollowUpOpen] = useState<Record<number, boolean>>({});
+
+  // Segment review state
+  const [reviewedSegments, setReviewedSegments] = useState<Set<number>>(new Set());
+  const [interactionLog, setInteractionLog] = useState<Array<{ segIdx: number; action: string; timestamp: number }>>([]);
+
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { features, level } = engine;
 
@@ -305,6 +301,12 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
     setSelectedIdx(null);
     setExploration(null);
     setExpandedSections(new Set());
+    setFollowUps({});
+    setFollowUpLoading({});
+    setFollowUpInputs({});
+    setFollowUpOpen({});
+    setReviewedSegments(new Set());
+    setInteractionLog([]);
     try {
       const res = await translateText(inputText, level);
       setResult(res);
@@ -324,6 +326,7 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
   const handleFetchExploration = async () => {
     if (selectedIdx === null || !result) return;
     const seg = segments[selectedIdx];
+    setInteractionLog((prev) => [...prev, { segIdx: selectedIdx, action: "exploration_opened", timestamp: Date.now() }]);
     setExplorationLoading(true);
     try {
       const res = await fetchExploration(
@@ -362,6 +365,39 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
     });
   };
 
+  const handleFollowUp = useCallback(async (segIdx: number) => {
+    const question = (followUpInputs[segIdx] || "").trim();
+    if (!question) return;
+    const seg = segments[segIdx];
+    setInteractionLog((prev) => [...prev, { segIdx, action: "followup_asked", timestamp: Date.now() }]);
+    setFollowUpLoading((prev) => ({ ...prev, [segIdx]: true }));
+    setFollowUpInputs((prev) => ({ ...prev, [segIdx]: "" }));
+    try {
+      const answer = await fetchLowFollowUp(seg, question);
+      setFollowUps((prev) => ({
+        ...prev,
+        [segIdx]: [{ question, answer }, ...(prev[segIdx] || [])],
+      }));
+    } finally {
+      setFollowUpLoading((prev) => ({ ...prev, [segIdx]: false }));
+    }
+  }, [segments, followUpInputs]);
+
+  const toggleReview = useCallback((idx: number) => {
+    setReviewedSegments((prev) => {
+      const next = new Set(prev);
+      const action = next.has(idx) ? "review_uncheck" : "review_check";
+      if (next.has(idx)) next.delete(idx); else next.add(idx);
+      setInteractionLog((p) => [...p, { segIdx: idx, action, timestamp: Date.now() }]);
+      return next;
+    });
+  }, []);
+
+  const handleSendReady = useCallback(() => {
+    console.log("[TransLucent] Interaction Log:", interactionLog);
+    console.log("[TransLucent] All segments reviewed. Ready to send.");
+  }, [interactionLog]);
+
   const levels: ProficiencyLevel[] = ["low", "mid"];
 
   // ── Render ──
@@ -396,10 +432,10 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
       </header>
 
       {/* ── Content ── */}
-      <div className={`tl-content tl-content--split`}>
+      <div className={`tl-content ${level === "low" ? "tl-content--stacked" : "tl-content--split"}`}>
 
-        {/* ── Input area (shared) ── */}
-        <div className="tl-left">
+        {/* ── Input area + Low mode output (shared) ── */}
+        <div className={level === "low" ? "tl-stacked-inner" : "tl-left"}>
           <div className="tl-card">
             <label className="tl-label">English Input</label>
 
@@ -425,26 +461,86 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
             </div>
           </div>
 
-          {/* ──────── LOW MODE OUTPUT ──────── */}
+          {/* ──────── LOW MODE OUTPUT — Inline annotations ──────── */}
           {level === "low" && result && (
-            <>
-              {/* Two-column translation: Korean | Back-translation */}
-              <div className="tl-card">
-                <label className="tl-label">Translation</label>
-                <div className="tl-two-col">
-                  <div className="tl-two-col-header">
-                    <span>Korean</span>
-                    <span>Back-translation</span>
-                  </div>
-                  {segments.map((seg, i) => (
-                    <div key={i} className="tl-two-col-row">
-                      <div className="tl-two-col-korean">{seg.korean}</div>
-                      <div className="tl-two-col-bt">{seg.backTranslation}</div>
+            <div className="tl-card">
+              <label className="tl-label">Translation</label>
+              <div className="tl-segment-list">
+                {segments.map((seg, i) => (
+                  <div key={i} className="tl-segment-wrapper">
+                    <button
+                      className={`tl-review-icon-btn ${reviewedSegments.has(i) ? "tl-review-icon-btn--checked" : ""}`}
+                      onClick={() => toggleReview(i)}
+                      aria-label={reviewedSegments.has(i) ? "Unmark as reviewed" : "Mark as reviewed"}
+                    >
+                      <span className="tl-review-icon" />
+                    </button>
+                    <div className="tl-segment-row">
+                      <div className="tl-segment-korean">{seg.korean}</div>
+                      <div className="tl-segment-bt">{seg.backTranslation}</div>
+                      {seg.normAlignment && (
+                        <div className="tl-segment-norm">{seg.normAlignment}</div>
+                      )}
+                      {/* Follow-up Q&A — always available */}
+                      {(seg.normAlignment || followUpOpen[i]) ? (
+                        <div className="tl-followup-area">
+                          {followUpLoading[i] && (
+                            <div className="tl-followup-loading">
+                              <div className="tl-spinner" />
+                              <span>Thinking…</span>
+                            </div>
+                          )}
+                          {(followUps[i] || []).map((qa, qi) => (
+                            <div key={qi} className="tl-followup-pair">
+                              <div className="tl-followup-q">Q: {qa.question}</div>
+                              <div className="tl-followup-a">{qa.answer}</div>
+                            </div>
+                          ))}
+                          <div className="tl-followup-input-row">
+                            <input
+                              type="text"
+                              className="tl-followup-input"
+                              placeholder="Ask about this…"
+                              value={followUpInputs[i] || ""}
+                              onChange={(e) =>
+                                setFollowUpInputs((prev) => ({ ...prev, [i]: e.target.value }))
+                              }
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") handleFollowUp(i);
+                              }}
+                              disabled={followUpLoading[i]}
+                            />
+                            <button
+                              className="tl-followup-send"
+                              onClick={() => handleFollowUp(i)}
+                              disabled={followUpLoading[i] || !(followUpInputs[i] || "").trim()}
+                            >
+                              ↵
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <button
+                          className="tl-followup-trigger"
+                          onClick={() => setFollowUpOpen((prev) => ({ ...prev, [i]: true }))}
+                        >
+                          Have a question?
+                        </button>
+                      )}
                     </div>
-                  ))}
-                </div>
+                  </div>
+                ))}
               </div>
-            </>
+              {/* Readiness bar */}
+              <div className="tl-readiness-bar">
+                <span className="tl-readiness-text">
+                  Reviewed {reviewedSegments.size} of {segments.length} segments
+                </span>
+                {reviewedSegments.size === segments.length && segments.length > 0 && (
+                  <button className="tl-send-btn" onClick={handleSendReady}>Ready to send</button>
+                )}
+              </div>
+            </div>
           )}
 
           {/* ──────── MID MODE — Left panel: Korean segments ──────── */}
@@ -456,57 +552,39 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
               </label>
               <div className="tl-sentences">
                 {segments.map((seg, i) => (
-                  <div
-                    key={i}
-                    className={`tl-sentence tl-sentence--interactive ${selectedIdx === i ? "tl-sentence--selected" : ""}`}
-                    onClick={() => handleSegmentTap(i)}
-                  >
-                    <div className="tl-korean">{seg.korean}</div>
+                  <div key={i} className="tl-segment-wrapper">
+                    <button
+                      className={`tl-review-icon-btn ${reviewedSegments.has(i) ? "tl-review-icon-btn--checked" : ""}`}
+                      onClick={() => toggleReview(i)}
+                      aria-label={reviewedSegments.has(i) ? "Unmark as reviewed" : "Mark as reviewed"}
+                    >
+                      <span className="tl-review-icon" />
+                    </button>
+                    <div
+                      className={`tl-sentence tl-sentence--interactive ${selectedIdx === i ? "tl-sentence--selected" : ""}`}
+                      onClick={() => handleSegmentTap(i)}
+                    >
+                      <div className="tl-korean">{seg.korean}</div>
+                    </div>
                   </div>
                 ))}
+              </div>
+              {/* Readiness bar */}
+              <div className="tl-readiness-bar">
+                <span className="tl-readiness-text">
+                  Reviewed {reviewedSegments.size} of {segments.length} segments
+                </span>
+                {reviewedSegments.size === segments.length && segments.length > 0 && (
+                  <button className="tl-send-btn" onClick={handleSendReady}>Ready to send</button>
+                )}
               </div>
             </div>
           )}
         </div>
 
-        {/* ──────── Right panel: Features ──────── */}
-        {(
+        {/* ──────── Right panel: Mid mode features only ──────── */}
+        {level === "mid" && (
           <div className="tl-right">
-            {/* ── LOW MODE: Situation Briefing in right panel ── */}
-            {level === "low" && !result && (
-              <div className="tl-empty-state">
-                <div className="tl-empty-icon">↵</div>
-                <div>Translate text to see the situation briefing</div>
-              </div>
-            )}
-
-            {level === "low" && result && (
-              <div className="tl-feature-panel">
-                <div className="tl-fp-segment-preview">
-                  <span className="tl-fp-segment-label">Situation Briefing</span>
-                  <div className="tl-fp-briefing-summary">
-                    {result.situationBriefing.summary}
-                  </div>
-                </div>
-
-                <div className="tl-briefing-norms">
-                  {result.situationBriefing.norms.map((norm, i) => (
-                    <div key={i} className="tl-fp-section">
-                      <div className="tl-fp-section-header">
-                        <CategoryLabel category={norm.category} />
-                        <span className="tl-fp-section-title">
-                          {norm.category.charAt(0).toUpperCase() + norm.category.slice(1)}
-                        </span>
-                      </div>
-                      <div className="tl-fp-section-body">
-                        <p className="tl-fp-norm-text">{norm.description}</p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
             {/* ── MID MODE: Exploration panel ── */}
             {level === "mid" && !result && (
               <div className="tl-empty-state">
