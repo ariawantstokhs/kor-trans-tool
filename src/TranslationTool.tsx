@@ -110,7 +110,7 @@ Respond ONLY with valid JSON matching this shape:
         }
       ],
       "communicative_function": "<short label for what this sentence does, e.g. Greeting, Self-introduction, Purpose statement, Credential presentation, Closing & gratitude>",
-      "norm_alignment": "<OPTIONAL — include ONLY when there is a meaningful communicative norm. 1-2 sentences describing what is generally expected for this communicative function in this specific context. Include relevant Korean expressions parenthetically so the user can locate them. Keep explanation in English. Omit this field entirely if no meaningful norm applies.>"
+      "norm_alignment": "<OPTIONAL — include ONLY when there is a noteworthy Korean convention at play. 1-2 sentences explaining WHY the translation is worded this way, so the user learns the convention. Write as if coaching the user: 'In Korean professional emails, X is typically done by Y — that's why this sentence uses Z (Korean expression).' Keep in English. Omit entirely if no meaningful convention applies.>"
     }
   ]
 }
@@ -121,7 +121,7 @@ Rules:
 - back_translation: translate each Korean sentence back to English independently.
 - tokens: break each Korean sentence into key words/morphemes with romanization, meaning, and part-of-speech.
 - communicative_function: REQUIRED for every segment. A short plain-English label describing the rhetorical role of this sentence in the writing (e.g. "Greeting", "Request", "Closing & gratitude").
-- norm_alignment: OPTIONAL. Include ONLY when there is a meaningful communicative norm relevant to this segment in this specific context. Describe the norm, NOT the translation. Be specific to the situation — do NOT give generic advice like "use polite language". Describe the concrete communicative convention. Include relevant Korean expressions in parentheses. Do NOT evaluate, judge, or suggest edits to the translation.
+- norm_alignment: OPTIONAL. Include ONLY when there is a noteworthy Korean convention at play. Explain WHY the translation is written this way so the user understands the convention and can apply it themselves next time. Be specific and actionable — e.g. "In Korean business emails, it's common to state your affiliation before your request — that's why this uses 소속 (affiliation) before the main ask." Do NOT give generic advice like "use polite language". Include relevant Korean expressions in parentheses. Do NOT evaluate or judge the translation.
 - Do NOT generate a document-level or email-level situation briefing. All situational information must be at the sentence level.
 - No markdown, no prose, pure JSON only.`;
 
@@ -289,10 +289,10 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
   const [selectionPopup, setSelectionPopup] = useState<{ text: string; segIdx: number; x: number; y: number } | null>(null);
 
   // Low follow-up state
+  const [selectedLowSegment, setSelectedLowSegment] = useState<number | null>(null);
   const [followUps, setFollowUps] = useState<Record<number, FollowUpQA[]>>({});
   const [followUpLoading, setFollowUpLoading] = useState<Record<number, boolean>>({});
   const [followUpInputs, setFollowUpInputs] = useState<Record<number, string>>({});
-  const [followUpOpen, setFollowUpOpen] = useState<Record<number, boolean>>({});
 
   // Segment review state
   const [reviewedSegments, setReviewedSegments] = useState<Set<number>>(new Set());
@@ -314,10 +314,10 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
     setExpandedSections(new Set());
     setShowBT({});
     setSelectionPopup(null);
+    setSelectedLowSegment(null);
     setFollowUps({});
     setFollowUpLoading({});
     setFollowUpInputs({});
-    setFollowUpOpen({});
     setReviewedSegments(new Set());
     setInteractionLog([]);
     try {
@@ -497,10 +497,10 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
       </header>
 
       {/* ── Content ── */}
-      <div className={`tl-content ${level === "low" ? "tl-content--stacked" : "tl-content--split"}`}>
+      <div className={`tl-content tl-content--split`}>
 
-        {/* ── Input area + Low mode output (shared) ── */}
-        <div className={level === "low" ? "tl-stacked-inner" : "tl-left"}>
+        {/* ── Input area + output (left panel) ── */}
+        <div className="tl-left">
           <div className="tl-card">
             <label className="tl-label">English Input</label>
 
@@ -526,71 +526,31 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
             </div>
           </div>
 
-          {/* ──────── LOW MODE OUTPUT — Inline annotations ──────── */}
+          {/* ──────── LOW MODE OUTPUT — Tappable segment rows ──────── */}
           {level === "low" && result && (
             <div className="tl-card">
-              <label className="tl-label">Translation</label>
+              <label className="tl-label">
+                Translation
+                <span className="tl-label-hint"> — tap a sentence to learn more</span>
+              </label>
               <div className="tl-segment-list">
                 {segments.map((seg, i) => (
                   <div key={i} className="tl-segment-wrapper">
                     <button
                       className={`tl-review-icon-btn ${reviewedSegments.has(i) ? "tl-review-icon-btn--checked" : ""}`}
-                      onClick={() => toggleReview(i)}
+                      onClick={(e) => { e.stopPropagation(); toggleReview(i); }}
                       aria-label={reviewedSegments.has(i) ? "Unmark as reviewed" : "Mark as reviewed"}
                     >
                       <span className="tl-review-icon" />
                     </button>
-                    <div className="tl-segment-row">
+                    <div
+                      className={`tl-segment-row tl-segment-row--tappable ${selectedLowSegment === i ? "tl-segment-row--selected" : ""}`}
+                      onClick={() => setSelectedLowSegment(i)}
+                    >
                       <div className="tl-segment-korean">{seg.korean}</div>
                       <div className="tl-segment-bt">{seg.backTranslation}</div>
                       {seg.normAlignment && (
                         <div className="tl-segment-norm">{seg.normAlignment}</div>
-                      )}
-                      {/* Follow-up Q&A — always available */}
-                      {(seg.normAlignment || followUpOpen[i]) ? (
-                        <div className="tl-followup-area">
-                          {followUpLoading[i] && (
-                            <div className="tl-followup-loading">
-                              <div className="tl-spinner" />
-                              <span>Thinking…</span>
-                            </div>
-                          )}
-                          {(followUps[i] || []).map((qa, qi) => (
-                            <div key={qi} className="tl-followup-pair">
-                              <div className="tl-followup-q">Q: {qa.question}</div>
-                              <div className="tl-followup-a">{qa.answer}</div>
-                            </div>
-                          ))}
-                          <div className="tl-followup-input-row">
-                            <input
-                              type="text"
-                              className="tl-followup-input"
-                              placeholder="Ask about this…"
-                              value={followUpInputs[i] || ""}
-                              onChange={(e) =>
-                                setFollowUpInputs((prev) => ({ ...prev, [i]: e.target.value }))
-                              }
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter") handleFollowUp(i);
-                              }}
-                              disabled={followUpLoading[i]}
-                            />
-                            <button
-                              className="tl-followup-send"
-                              onClick={() => handleFollowUp(i)}
-                              disabled={followUpLoading[i] || !(followUpInputs[i] || "").trim()}
-                            >
-                              ↵
-                            </button>
-                          </div>
-                        </div>
-                      ) : (
-                        <button
-                          className="tl-followup-trigger"
-                          onClick={() => setFollowUpOpen((prev) => ({ ...prev, [i]: true }))}
-                        >
-                          Have a question?
-                        </button>
                       )}
                     </div>
                   </div>
@@ -695,7 +655,74 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
           )}
         </div>
 
-        {/* ──────── Right panel: Mid mode features only ──────── */}
+        {/* ──────── Right panel: Low mode — norm + Q&A ──────── */}
+        {level === "low" && (
+          <div className="tl-right">
+            {!result && (
+              <div className="tl-empty-state">
+                <div className="tl-empty-icon">↵</div>
+                <div>Translate text to get started</div>
+              </div>
+            )}
+
+            {result && selectedLowSegment === null && (
+              <div className="tl-empty-state">
+                <div className="tl-empty-icon">←</div>
+                <div>Tap a sentence to ask about it</div>
+              </div>
+            )}
+
+            {result && selectedLowSegment !== null && (
+              <div className="tl-feature-panel">
+                {/* Selected sentence context */}
+                <div className="tl-low-context-header">
+                  <div className="tl-low-context-label">Asking about</div>
+                  <div className="tl-low-context-bt">{segments[selectedLowSegment].backTranslation}</div>
+                </div>
+
+                {/* Q&A area */}
+                <div className="tl-followup-area">
+                  {followUpLoading[selectedLowSegment] && (
+                    <div className="tl-followup-loading">
+                      <div className="tl-spinner" />
+                      <span>Thinking…</span>
+                    </div>
+                  )}
+                  {(followUps[selectedLowSegment] || []).map((qa, qi) => (
+                    <div key={qi} className="tl-followup-pair">
+                      <div className="tl-followup-q">Q: {qa.question}</div>
+                      <div className="tl-followup-a">{qa.answer}</div>
+                    </div>
+                  ))}
+                  <div className="tl-followup-input-row">
+                    <input
+                      type="text"
+                      className="tl-followup-input"
+                      placeholder="Ask about this sentence…"
+                      value={followUpInputs[selectedLowSegment] || ""}
+                      onChange={(e) =>
+                        setFollowUpInputs((prev) => ({ ...prev, [selectedLowSegment]: e.target.value }))
+                      }
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") handleFollowUp(selectedLowSegment);
+                      }}
+                      disabled={followUpLoading[selectedLowSegment]}
+                    />
+                    <button
+                      className="tl-followup-send"
+                      onClick={() => handleFollowUp(selectedLowSegment)}
+                      disabled={followUpLoading[selectedLowSegment] || !(followUpInputs[selectedLowSegment] || "").trim()}
+                    >
+                      ↵
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ──────── Right panel: Mid mode — drill-down ──────── */}
         {level === "mid" && (
           <div className="tl-right">
             {!result && (
