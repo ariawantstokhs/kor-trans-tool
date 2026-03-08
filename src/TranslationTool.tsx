@@ -524,12 +524,6 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
 
             {level === "mid" && result && selectedIdx !== null && (
               <div className="tl-feature-panel">
-                {/* Selected segment preview */}
-                <div className="tl-fp-segment-preview">
-                  <span className="tl-fp-segment-label">Selected segment</span>
-                  <div className="tl-fp-segment-korean">{segments[selectedIdx].korean}</div>
-                </div>
-
                 {/* Back-translation — always shown automatically */}
                 <div className="tl-fp-section tl-fp-section--bt">
                   <div className="tl-fp-section-header">
