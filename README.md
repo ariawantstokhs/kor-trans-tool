@@ -7,8 +7,7 @@ verification and exploration tools depending on whether the user can
 read the target language — enabling informed decisions about translation
 quality at every proficiency level.
 
-Currently implemented for English → Korean professional email
-translation as a research prototype.
+Currently implemented for English → Korean professional translation as a research prototype.
 
 ## Core Concept
 
@@ -29,9 +28,8 @@ AI to judge its own output.
 
 | Feature | Low | Mid |
 |---------|-----|-----|
-| **Back-translation** | Always visible — inline per sentence with Korean | On-demand — toggle per sentence via ↩ button |
-| **Norm Alignment** | Inline per sentence — explains Korean conventions used | Same data available |
-| **Follow-up Q&A** | On-demand — tap a sentence, ask free-text questions in right panel | OFF |
+| **Back-translation** | Displayed individually as options to choose from per sentence | On-demand — toggle per sentence via ↩ button |
+| **Follow-up Q&A** | Sentence-by-sentence version selection (Slides) | OFF |
 | **Contextual Exploration** | OFF | On-demand — select any Korean text to drill down |
 
 ## User Flow
@@ -47,22 +45,27 @@ After setup, the tool launches with the appropriate feature set. A **DEV toggle*
 
 ### Low Mode
 
-A **split-panel layout** designed for users who cannot read Korean:
+A **full-width slide selection flow** designed for users who cannot independently verify the translation:
 
-**Left panel — Translation output:**
-- Each sentence is displayed as a tappable row containing:
-  - **Korean text** (the translated sentence)
-  - **Back-translation** (English re-translation, always visible)
-  - **Norm alignment** (optional inline note explaining the Korean convention used)
-- A **review checkbox** beside each sentence lets the user mark segments as reviewed
-- A **readiness bar** at the bottom tracks progress (e.g. "Reviewed 3 of 5 segments") and shows a "Ready to send" button once all segments are checked
+**Slide sequence:**
+- The English text generates a base translation in the background.
+- The user is sequentially shown each original English sentence.
+- For each sentence, the system provides 3 **Korean alternative translations**.
+- Since the user cannot read the Korean, each alternative is paired with its English **Back-translation** and a short 1-2 sentence explanation of its nuance or tone (e.g., "more formal", "softer request").
+- The user selects the version that aligns best with their intended tone, then clicks "Next".
 
-**Right panel — Follow-up Q&A:**
-- Tapping a sentence on the left selects it and opens the right panel
-- A header shows "Asking about" + the back-translation of the selected sentence, giving context
-- The user types free-text questions (e.g. "Is this too formal?", "Would a Korean reader find this rude?")
-- The LLM answers in 2–3 sentences based on the segment's context (Call 2), without judging the translation
-- Multiple Q&A pairs accumulate, most recent first
+**Pre-fetching:**
+- While the user is viewing the current slide, the system asynchronously fetches the alternatives for the next slide.
+
+**Final Review View:**
+- Once all sentences are chosen, a **Final Review** screen displays the constructed Korean document on the left, alongside the chosen English back-translations on the right.
+- The user can click a "Change" button next to any sentence to jump back to that specific slide and reconsider their choice.
+- Clicking "Finalize Document" completes the flow and moves to the Final screen.
+
+**Document Ready View:**
+- The fully assembled Korean text is presented in a clean, selectable central card.
+- A **Copy to Clipboard** button easily transfers the final output to the user's clipboard (`document_copied` interaction logged).
+- A **Start Over** button clears the state and returns to the initial input.
 
 ### Mid Mode
 
@@ -86,9 +89,9 @@ A **split-panel layout** designed for users who can partially read Korean:
 
 Three-call architecture with split responsibilities:
 
-1. **Call 1 — Translation** (`translateText`): Translates the full email, generates sentence segments with token-level data (romanization, meaning, part-of-speech), back-translations, communicative function labels, norm alignment notes, and original English mapping. The LLM infers communicative context (recipient type, formality level, social relationship) from the email content itself.
+1. **Call 1 — Translation** (`translateText`): Translates the full text, generates sentence segments with token-level data (romanization, meaning, part-of-speech), back-translations, communicative function labels, and original English mapping. The LLM infers communicative context (recipient type, formality level, social relationship) from the text content itself.
 
-2. **Call 2 — Low Follow-Up Q&A** (`fetchLowFollowUp`): Fetched on-demand when the Low-mode user asks a question about a specific sentence. Receives the segment's original English, Korean, back-translation, and norm alignment as context. Returns a 2–3 sentence answer in plain English without evaluating the translation.
+2. **Call 2 — Sentence Alternatives** (`generateSentenceAlternatives`, Low only): Fetched per sentence in Low mode. Receives the segment's original English, full English context, and base Korean translation. Generates 2 additional Korean variants (+ the base). Returns each variant's back-translation and a short 1-2 sentence explanation of its nuance/tone.
 
 3. **Call 3 — Exploration** (`fetchExploration`, Mid only): Fetched on-demand when the user selects a phrase in Mid mode. Returns alternative expressions (with formality and nuance), grammar patterns (with examples), and cultural context. Receives the tapped expression, full Korean sentence, back-translation, and original English for grounding.
 
@@ -96,7 +99,7 @@ Three-call architecture with split responsibilities:
 
 ```
 TranslationResult
-├── koreanTranslation: string       (full Korean email)
+├── koreanTranslation: string       (full Korean text)
 └── segments: SentenceSegment[]
     ├── korean: string              (one Korean sentence)
     ├── backTranslation: string     (English back-translation)
@@ -107,7 +110,11 @@ TranslationResult
     │   ├── meaning: string
     │   └── pos: string             (part of speech)
     ├── communicativeFunction: string (e.g. "Greeting", "Request")
-    └── normAlignment?: string       (optional Korean convention note)
+
+SentenceOption (Low only, per slide)
+├── korean: string                  (alternative or default Korean)
+├── backTranslation: string         (English re-translation)
+└── explanation: string             (nuance/tone context)
 
 ExplorationResult (Mid only, on-demand)
 ├── alternatives: AlternativeExpression[]
@@ -120,10 +127,12 @@ ExplorationResult (Mid only, on-demand)
 ## Interaction Logging
 
 TransLucent logs user interactions for research purposes:
-- **Segment review** — tracks when each segment is checked/unchecked as reviewed
-- **Follow-up questions** — logs when a Low-mode user asks a question
-- **Exploration opened** — logs when a Mid-mode user opens the exploration panel
-- All events are timestamped and stored in an in-memory interaction log, output to console when the user clicks "Ready to send"
+- **Slide Progression (Low)** — `slide_enter` tracks exactly which sentence the user is currently reviewing.
+- **Option Selection (Low)** — `option_selected` and `option_changed` tracks the user toggling between different nuance variants.
+- **Review Adjustments (Low)** — `review_change_request` triggers when jumping back to a slide from the Final Review screen.
+- **Document Confirmed & Copied (Low)** — logs `document_confirmed` upon finalization, and `document_copied` when copying the final text.
+- **Exploration opened (Mid)** — logs when a Mid-mode user opens the exploration panel.
+- All events are timestamped and stored in an in-memory interaction log, output to console upon final confirmation (`document_confirmed` or "Ready to send").
 
 ## Tech Stack
 

@@ -13,18 +13,20 @@ interface TokenData {
   pos: string;
 }
 
+type LowModeStep = 'input' | 'slides' | 'review' | 'final';
+
+interface SentenceOption {
+  korean: string;
+  backTranslation: string;
+  explanation: string;
+}
+
 interface SentenceSegment {
   korean: string;
   backTranslation: string;
   tokens: TokenData[];
   communicativeFunction: string;
-  normAlignment?: string;
   originalEnglish?: string;
-}
-
-interface FollowUpQA {
-  question: string;
-  answer: string;
 }
 
 interface TranslationResult {
@@ -89,13 +91,12 @@ async function translateText(
 ): Promise<TranslationResult> {
   const contextLine = "Infer the recipient type and formality from the text content.";
 
-  const systemPrompt = `You are a Korean translation assistant specializing in professional emails.
-${contextLine}
-The user's Korean proficiency level is: ${level}.
+  const systemPrompt = `You are a Korean translation assistant specializing in professional writing.
+The user will provide a text in English (a message, document, or letter). Your task is to translate it into natural, highly professional Korean and analyze it sentence by sentence.
 
 Respond ONLY with valid JSON matching this shape:
 {
-  "korean_translation": "<full Korean email as a single string>",
+  "korean_translation": "<full Korean text as a single string>",
   "sentence_segments": [
     {
       "korean": "<one Korean sentence>",
@@ -109,8 +110,7 @@ Respond ONLY with valid JSON matching this shape:
           "pos": "<part of speech>"
         }
       ],
-      "communicative_function": "<short label for what this sentence does, e.g. Greeting, Self-introduction, Purpose statement, Credential presentation, Closing & gratitude>",
-      "norm_alignment": "<OPTIONAL — include ONLY when there is a noteworthy Korean convention at play. 1-2 sentences describing the convention as it actually exists in Korean professional communication. Write as if coaching the user: 'In Korean professional emails, X is typically done by Y — so expressions like Z (Korean expression) are standard here.' Do NOT explain why the translation chose specific words. If the translation uses a non-standard expression, describe what is conventionally used instead. Keep in English. Omit entirely if no meaningful convention applies.>"
+      "communicative_function": "<short label for what this sentence does, e.g. Greeting, Self-introduction, Purpose statement, Credential presentation, Closing & gratitude>"
     }
   ]
 }
@@ -121,11 +121,10 @@ Rules:
 - back_translation: translate each Korean sentence back to English independently.
 - tokens: break each Korean sentence into key words/morphemes with romanization, meaning, and part-of-speech.
 - communicative_function: REQUIRED for every segment. A short plain-English label describing the rhetorical role of this sentence in the writing (e.g. "Greeting", "Request", "Closing & gratitude").
-- norm_alignment: OPTIONAL. Include ONLY when there is a noteworthy Korean convention at play. Describe the convention as it actually exists in Korean professional communication — what expressions are conventionally used, what is standard practice, and why. Be specific and actionable — e.g. "In Korean business emails, it's common to state your affiliation before your request — that's why structures like 소속 (affiliation) followed by the main ask are standard." Include relevant Korean expressions in parentheses. Do NOT give generic advice like "use polite language". Do NOT evaluate, judge, defend, or rationalize the translation's specific word choices. If the translation uses a non-standard expression, describe what is conventionally used — do not explain why the translation's choice is acceptable.
-- Do NOT generate a document-level or email-level situation briefing. All situational information must be at the sentence level.
+- Do NOT generate a document-level situation briefing. All situational information must be at the sentence level.
 - No markdown, no prose, pure JSON only.`;
 
-  const raw = await callOpenAI(systemPrompt, `Translate this professional email to Korean:\n"${text}"`);
+  const raw = await callOpenAI(systemPrompt, `Translate this professional text to Korean:\n"${text}"`);
   console.log("[Call 1] Raw response length:", raw.length);
   console.log("[Call 1] Raw response:", raw.substring(0, 500));
   try {
@@ -143,7 +142,6 @@ Rules:
           pos: t.pos || "",
         })),
         communicativeFunction: s.communicative_function || "",
-        normAlignment: s.norm_alignment || undefined,
         originalEnglish: s.original_english || undefined,
       })),
     };
@@ -157,29 +155,55 @@ Rules:
   }
 }
 
-// ── Call 2: Low Follow-Up (on-demand) ──
+// ── Call 2: Alternative Generation (Low mode, sentence-level) ──
 
-async function fetchLowFollowUp(
-  segment: SentenceSegment,
-  userQuestion: string
-): Promise<string> {
-  const systemPrompt = `The user is reviewing a Korean translation and has asked a follow-up question about a specific segment. Answer their question using only the context below. Keep your answer in English, 2–3 sentences max.
+async function generateSentenceAlternatives(
+  originalEnglish: string,
+  fullEnglishText: string,
+  baseKorean: string,
+): Promise<SentenceOption[]> {
+  const systemPrompt = `You are a Korean translation assistant. 
+The user is writing a professional document or message.
+Full text context: "${fullEnglishText}"
 
-Rules:
-- Answer only what the user asked. Do not evaluate the translation or suggest edits.
-- If the question is about how something would be perceived by a Korean reader, describe the convention — do not say the translation is right or wrong.
-- Stay within this segment's scope. Do not comment on other parts of the translation.
-- No markdown formatting. Plain text only.`;
+For the specific sentence: "${originalEnglish}"
+The default Korean translation is: "${baseKorean}"
 
-  const userMessage = `Context:
-Original English: ${segment.originalEnglish || "(not available)"}
-Korean: ${segment.korean}
-Back-translation: ${segment.backTranslation}
-Communicative norm: ${segment.normAlignment || "(none)"}
+Your task:
+1. Provide a short 1-2 sentence explanation of the nuance/tone of the default translation IN ENGLISH.
+2. Generate 2 meaningfully different alternative Korean translations for this sentence that represent different communicative choices the sender might face (e.g., different familiarity with the recipient, different relationship dynamics, different purposes). Do NOT generate alternatives that differ only in politeness level of the same expression.
+3. For each alternative, provide its back-translation to English and a short 1-2 sentence explanation of its nuance/tone and when it's appropriate IN ENGLISH.
 
-User's question: ${userQuestion}`;
+Respond ONLY with valid JSON matching this shape:
+{
+  "options": [
+    {
+      "korean": "<default translation>",
+      "backTranslation": "<back-translation of default>",
+      "explanation": "<explanation of default translation's nuance IN ENGLISH>"
+    },
+    {
+      "korean": "<alternative 1>",
+      "backTranslation": "<back-translation 1>",
+      "explanation": "<explanation 1 IN ENGLISH>"
+    },
+    {
+      "korean": "<alternative 2>",
+      "backTranslation": "<back-translation 2>",
+      "explanation": "<explanation 2 IN ENGLISH>"
+    }
+  ]
+}
+No markdown, pure JSON only.`;
 
-  return await callOpenAI(systemPrompt, userMessage);
+  const raw = await callOpenAI(systemPrompt, "Generate options.");
+  try {
+    const parsed = JSON.parse(raw.replace(/```json|```/g, "").trim());
+    return parsed.options || [];
+  } catch (err) {
+    console.error("[Call 2] Alternative generation error", err);
+    return [];
+  }
 }
 
 // ── Call 3: Exploration Data (Mid only, on-demand, phrase-level) ──
@@ -288,15 +312,16 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
   const [showBT, setShowBT] = useState<Record<number, boolean>>({});
   const [selectionPopup, setSelectionPopup] = useState<{ text: string; segIdx: number; x: number; y: number } | null>(null);
 
-  // Low follow-up state
-  const [selectedLowSegment, setSelectedLowSegment] = useState<number | null>(null);
-  const [followUps, setFollowUps] = useState<Record<number, FollowUpQA[]>>({});
-  const [followUpLoading, setFollowUpLoading] = useState<Record<number, boolean>>({});
-  const [followUpInputs, setFollowUpInputs] = useState<Record<number, string>>({});
+  // Low slide view state
+  const [lowModeStep, setLowModeStep] = useState<LowModeStep>('input');
+  const [currentSlideIndex, setCurrentSlideIndex] = useState(0);
+  const [sentenceOptions, setSentenceOptions] = useState<Record<number, SentenceOption[]>>({});
+  const [selectedOptions, setSelectedOptions] = useState<Record<number, number>>({});
+  const fetchingOptions = useRef<Set<number>>(new Set());
 
   // Segment review state
   const [reviewedSegments, setReviewedSegments] = useState<Set<number>>(new Set());
-  const [interactionLog, setInteractionLog] = useState<Array<{ segIdx: number; action: string; timestamp: number }>>([]);
+  const [interactionLog, setInteractionLog] = useState<any[]>([]);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const sentencesRef = useRef<HTMLDivElement>(null);
@@ -314,16 +339,21 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
     setExpandedSections(new Set());
     setShowBT({});
     setSelectionPopup(null);
-    setSelectedLowSegment(null);
-    setFollowUps({});
-    setFollowUpLoading({});
-    setFollowUpInputs({});
+    setLowModeStep('input');
     setReviewedSegments(new Set());
     setInteractionLog([]);
     try {
       const res = await translateText(inputText, level);
       setResult(res);
       setSegments([...res.segments]);
+      if (level === 'low' && res.segments.length > 0) {
+        setLowModeStep('slides');
+        setCurrentSlideIndex(0);
+        setSentenceOptions({});
+        setSelectedOptions({});
+        fetchingOptions.current = new Set();
+        setInteractionLog(prev => [...prev, { type: "slide_enter", sentenceIdx: 0, timestamp: Date.now() }]);
+      }
     } finally {
       setLoading(false);
     }
@@ -418,24 +448,6 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
     });
   };
 
-  const handleFollowUp = useCallback(async (segIdx: number) => {
-    const question = (followUpInputs[segIdx] || "").trim();
-    if (!question) return;
-    const seg = segments[segIdx];
-    setInteractionLog((prev) => [...prev, { segIdx, action: "followup_asked", timestamp: Date.now() }]);
-    setFollowUpLoading((prev) => ({ ...prev, [segIdx]: true }));
-    setFollowUpInputs((prev) => ({ ...prev, [segIdx]: "" }));
-    try {
-      const answer = await fetchLowFollowUp(seg, question);
-      setFollowUps((prev) => ({
-        ...prev,
-        [segIdx]: [{ question, answer }, ...(prev[segIdx] || [])],
-      }));
-    } finally {
-      setFollowUpLoading((prev) => ({ ...prev, [segIdx]: false }));
-    }
-  }, [segments, followUpInputs]);
-
   const toggleReview = useCallback((idx: number) => {
     setReviewedSegments((prev) => {
       const next = new Set(prev);
@@ -464,6 +476,59 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
+
+  const fetchOptionsForIndex = useCallback(async (idx: number, segs: SentenceSegment[], text: string) => {
+    if (fetchingOptions.current.has(idx) || sentenceOptions[idx] || idx >= segs.length) return;
+    fetchingOptions.current.add(idx);
+    const seg = segs[idx];
+    if (!seg.originalEnglish) {
+      setSentenceOptions(prev => ({ ...prev, [idx]: [{ korean: seg.korean, backTranslation: seg.backTranslation, explanation: "Standard translation." }] }));
+      return;
+    }
+    const opts = await generateSentenceAlternatives(seg.originalEnglish, text, seg.korean);
+    const validOpts = opts.length > 0 ? opts : [{ korean: seg.korean, backTranslation: seg.backTranslation, explanation: "Standard translation." }];
+    setSentenceOptions(prev => ({ ...prev, [idx]: validOpts }));
+  }, [sentenceOptions]);
+
+  // Pre-fetch next options
+  useEffect(() => {
+    if (level === 'low' && lowModeStep === 'slides' && segments.length > 0) {
+      if (!sentenceOptions[currentSlideIndex]) {
+        fetchOptionsForIndex(currentSlideIndex, segments, inputText);
+      }
+      if (currentSlideIndex + 1 < segments.length && !sentenceOptions[currentSlideIndex + 1]) {
+        fetchOptionsForIndex(currentSlideIndex + 1, segments, inputText);
+      }
+    }
+  }, [level, lowModeStep, currentSlideIndex, segments, inputText, sentenceOptions, fetchOptionsForIndex]);
+
+  const handleOptionSelect = (idx: number, optIdx: number) => {
+    setSelectedOptions(prev => {
+      const prevOptIdx = prev[idx];
+      if (prevOptIdx !== undefined && prevOptIdx !== optIdx) {
+        setInteractionLog(log => [...log, { type: "option_changed", sentenceIdx: idx, prevOptionIdx: prevOptIdx, newOptionIdx: optIdx, timestamp: Date.now() }]);
+      } else if (prevOptIdx === undefined) {
+        setInteractionLog(log => [...log, { type: "option_selected", sentenceIdx: idx, optionIdx: optIdx, timestamp: Date.now() }]);
+      }
+      return { ...prev, [idx]: optIdx };
+    });
+  };
+
+  const handleNextSlide = () => {
+    if (currentSlideIndex < segments.length - 1) {
+      setCurrentSlideIndex(p => p + 1);
+      setInteractionLog(log => [...log, { type: "slide_enter", sentenceIdx: currentSlideIndex + 1, timestamp: Date.now() }]);
+    } else {
+      setLowModeStep('review');
+    }
+  };
+
+  const handlePrevSlide = () => {
+    if (currentSlideIndex > 0) {
+      setCurrentSlideIndex(p => p - 1);
+      setInteractionLog(log => [...log, { type: "slide_enter", sentenceIdx: currentSlideIndex - 1, timestamp: Date.now() }]);
+    }
+  };
 
   // ── Render ──
 
@@ -497,232 +562,125 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
       </header>
 
       {/* ── Content ── */}
-      <div className={`tl-content tl-content--split`}>
+      <div className={`tl-content ${level === "mid" || lowModeStep === "input" ? "tl-content--split" : "tl-content--single"}`}>
 
         {/* ── Input area + output (left panel) ── */}
-        <div className="tl-left">
-          <div className="tl-card">
-            <label className="tl-label">English Input</label>
-
-
-            <textarea
-              ref={textareaRef}
-              value={inputText}
-              onChange={(e) => setInputText(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handleTranslate(); }}
-              placeholder="Type a professional email to translate…"
-              rows={4}
-              className="tl-textarea"
-            />
-            <div className="tl-input-footer">
-              <span className="tl-hint">Ctrl+Enter to translate</span>
-              <button
-                onClick={handleTranslate}
-                disabled={loading || !inputText.trim()}
-                className="tl-translate-btn"
-              >
-                {loading ? "Translating…" : "Translate ↵"}
-              </button>
-            </div>
-          </div>
-
-          {/* ──────── LOW MODE OUTPUT — Tappable segment rows ──────── */}
-          {level === "low" && result && (
+        {(level === "mid" || lowModeStep === "input") && (
+          <div className="tl-left">
             <div className="tl-card">
-              <label className="tl-label">
-                Translation
-                <span className="tl-label-hint"> — tap a sentence to learn more</span>
-              </label>
-              <div className="tl-segment-list">
-                {segments.map((seg, i) => (
-                  <div key={i} className="tl-segment-wrapper">
-                    <button
-                      className={`tl-review-icon-btn ${reviewedSegments.has(i) ? "tl-review-icon-btn--checked" : ""}`}
-                      onClick={(e) => { e.stopPropagation(); toggleReview(i); }}
-                      aria-label={reviewedSegments.has(i) ? "Unmark as reviewed" : "Mark as reviewed"}
-                    >
-                      <span className="tl-review-icon" />
-                    </button>
-                    <div
-                      className={`tl-segment-row tl-segment-row--tappable ${selectedLowSegment === i ? "tl-segment-row--selected" : ""}`}
-                      onClick={() => setSelectedLowSegment(i)}
-                    >
-                      <div className="tl-segment-korean">{seg.korean}</div>
-                      <div className="tl-segment-bt">{seg.backTranslation}</div>
-                      {seg.normAlignment && (
-                        <div className="tl-segment-norm">{seg.normAlignment}</div>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-              {/* Readiness bar */}
-              <div className="tl-readiness-bar">
-                <span className="tl-readiness-text">
-                  Reviewed {reviewedSegments.size} of {segments.length} segments
-                </span>
-                {reviewedSegments.size === segments.length && segments.length > 0 && (
-                  <button className="tl-send-btn" onClick={handleSendReady}>Ready to send</button>
-                )}
+              <label className="tl-label">English Input</label>
+
+
+              <textarea
+                ref={textareaRef}
+                value={inputText}
+                onChange={(e) => setInputText(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handleTranslate(); }}
+                placeholder="Type a professional message to translate…"
+                rows={4}
+                className="tl-textarea"
+              />
+              <div className="tl-input-footer">
+                <span className="tl-hint">Ctrl+Enter to translate</span>
+                <button
+                  onClick={handleTranslate}
+                  disabled={loading || !inputText.trim()}
+                  className="tl-translate-btn"
+                >
+                  {loading ? "Translating…" : "Translate ↵"}
+                </button>
               </div>
             </div>
-          )}
 
-          {/* ──────── MID MODE — Left panel: Korean segments (select text to explore) ──────── */}
-          {level === "mid" && result && (
-            <div className="tl-card">
-              <label className="tl-label">
-                Korean Translation
-                <span className="tl-label-hint"> — select a word to explore</span>
-              </label>
-              <div className="tl-sentences" ref={sentencesRef} onMouseUp={handleTextSelection}>
-                {segments.map((seg, i) => (
-                  <div key={i} className="tl-segment-wrapper">
-                    <button
-                      className={`tl-review-icon-btn ${reviewedSegments.has(i) ? "tl-review-icon-btn--checked" : ""}`}
-                      onClick={() => toggleReview(i)}
-                      aria-label={reviewedSegments.has(i) ? "Unmark as reviewed" : "Mark as reviewed"}
-                    >
-                      <span className="tl-review-icon" />
-                    </button>
-                    <div
-                      className="tl-sentence"
-                      data-seg-idx={i}
-                    >
-                      <div className="tl-korean tl-korean--selectable">
-                        {selectedPhrase && selectedPhrase.segIdx === i && seg.korean.includes(selectedPhrase.text) ? (
-                          (() => {
-                            const idx = seg.korean.indexOf(selectedPhrase.text);
-                            return (
-                              <>
-                                {seg.korean.slice(0, idx)}
-                                <mark className="tl-highlight">{selectedPhrase.text}</mark>
-                                {seg.korean.slice(idx + selectedPhrase.text.length)}
-                              </>
-                            );
-                          })()
-                        ) : (
-                          seg.korean
+            {/* ──────── MID MODE — Left panel: Korean segments (select text to explore) ──────── */}
+            {level === "mid" && result && (
+              <div className="tl-card">
+                <label className="tl-label">
+                  Korean Translation
+                  <span className="tl-label-hint"> — select a word to explore</span>
+                </label>
+                <div className="tl-sentences" ref={sentencesRef} onMouseUp={handleTextSelection}>
+                  {segments.map((seg, i) => (
+                    <div key={i} className="tl-segment-wrapper">
+                      <button
+                        className={`tl-review-icon-btn ${reviewedSegments.has(i) ? "tl-review-icon-btn--checked" : ""}`}
+                        onClick={() => toggleReview(i)}
+                        aria-label={reviewedSegments.has(i) ? "Unmark as reviewed" : "Mark as reviewed"}
+                      >
+                        <span className="tl-review-icon" />
+                      </button>
+                      <div
+                        className="tl-sentence"
+                        data-seg-idx={i}
+                      >
+                        <div className="tl-korean tl-korean--selectable">
+                          {selectedPhrase && selectedPhrase.segIdx === i && seg.korean.includes(selectedPhrase.text) ? (
+                            (() => {
+                              const idx = seg.korean.indexOf(selectedPhrase.text);
+                              return (
+                                <>
+                                  {seg.korean.slice(0, idx)}
+                                  <mark className="tl-highlight">{selectedPhrase.text}</mark>
+                                  {seg.korean.slice(idx + selectedPhrase.text.length)}
+                                </>
+                              );
+                            })()
+                          ) : (
+                            seg.korean
+                          )}
+                        </div>
+                        <div className="tl-bt-row">
+                          <button
+                            className="tl-bt-toggle"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setShowBT((prev) => ({ ...prev, [i]: !prev[i] }));
+                            }}
+                            title="Show back-translation"
+                          >
+                            ↩
+                          </button>
+                        </div>
+                        {showBT[i] && (
+                          <div className="tl-bt-inline">{seg.backTranslation}</div>
                         )}
                       </div>
-                      <div className="tl-bt-row">
-                        <button
-                          className="tl-bt-toggle"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setShowBT((prev) => ({ ...prev, [i]: !prev[i] }));
-                          }}
-                          title="Show back-translation"
-                        >
-                          ↩
-                        </button>
-                      </div>
-                      {showBT[i] && (
-                        <div className="tl-bt-inline">{seg.backTranslation}</div>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              {/* Floating selection popup */}
-              {selectionPopup && (
-                <div
-                  className="tl-selection-popup"
-                  style={{
-                    position: "fixed",
-                    left: selectionPopup.x,
-                    top: selectionPopup.y,
-                    transform: "translate(-50%, -100%)",
-                  }}
-                >
-                  <button className="tl-selection-popup-btn" onClick={handleExploreSelection}>
-                    Explore ▸
-                  </button>
-                </div>
-              )}
-
-              {/* Readiness bar */}
-              <div className="tl-readiness-bar">
-                <span className="tl-readiness-text">
-                  Reviewed {reviewedSegments.size} of {segments.length} segments
-                </span>
-                {reviewedSegments.size === segments.length && segments.length > 0 && (
-                  <button className="tl-send-btn" onClick={handleSendReady}>Ready to send</button>
-                )}
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* ──────── Right panel: Low mode — norm + Q&A ──────── */}
-        {level === "low" && (
-          <div className="tl-right">
-            {!result && (
-              <div className="tl-empty-state">
-                <div className="tl-empty-icon">↵</div>
-                <div>Translate text to get started</div>
-              </div>
-            )}
-
-            {result && selectedLowSegment === null && (
-              <div className="tl-empty-state">
-                <div className="tl-empty-icon">←</div>
-                <div>Tap a sentence to ask about it</div>
-              </div>
-            )}
-
-            {result && selectedLowSegment !== null && (
-              <div className="tl-feature-panel">
-                {/* Selected sentence context */}
-                <div className="tl-low-context-header">
-                  <div className="tl-low-context-label">Asking about</div>
-                  <div className="tl-low-context-bt">{segments[selectedLowSegment].backTranslation}</div>
-                </div>
-
-                {/* Q&A area */}
-                <div className="tl-followup-area">
-                  {followUpLoading[selectedLowSegment] && (
-                    <div className="tl-followup-loading">
-                      <div className="tl-spinner" />
-                      <span>Thinking…</span>
-                    </div>
-                  )}
-                  {(followUps[selectedLowSegment] || []).map((qa, qi) => (
-                    <div key={qi} className="tl-followup-pair">
-                      <div className="tl-followup-q">Q: {qa.question}</div>
-                      <div className="tl-followup-a">{qa.answer}</div>
                     </div>
                   ))}
-                  <div className="tl-followup-input-row">
-                    <input
-                      type="text"
-                      className="tl-followup-input"
-                      placeholder="Ask about this sentence…"
-                      value={followUpInputs[selectedLowSegment] || ""}
-                      onChange={(e) =>
-                        setFollowUpInputs((prev) => ({ ...prev, [selectedLowSegment]: e.target.value }))
-                      }
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") handleFollowUp(selectedLowSegment);
-                      }}
-                      disabled={followUpLoading[selectedLowSegment]}
-                    />
-                    <button
-                      className="tl-followup-send"
-                      onClick={() => handleFollowUp(selectedLowSegment)}
-                      disabled={followUpLoading[selectedLowSegment] || !(followUpInputs[selectedLowSegment] || "").trim()}
-                    >
-                      ↵
+                </div>
+
+                {/* Floating selection popup */}
+                {selectionPopup && (
+                  <div
+                    className="tl-selection-popup"
+                    style={{
+                      position: "fixed",
+                      left: selectionPopup.x,
+                      top: selectionPopup.y,
+                      transform: "translate(-50%, -100%)",
+                    }}
+                  >
+                    <button className="tl-selection-popup-btn" onClick={handleExploreSelection}>
+                      Explore ▸
                     </button>
                   </div>
+                )}
+
+                {/* Readiness bar */}
+                <div className="tl-readiness-bar">
+                  <span className="tl-readiness-text">
+                    Reviewed {reviewedSegments.size} of {segments.length} segments
+                  </span>
+                  {reviewedSegments.size === segments.length && segments.length > 0 && (
+                    <button className="tl-send-btn" onClick={handleSendReady}>Ready to send</button>
+                  )}
                 </div>
               </div>
             )}
           </div>
         )}
 
-        {/* ──────── Right panel: Mid mode — drill-down ──────── */}
+        {/* ──────── Right panel: Mid mode ──────── */}
         {level === "mid" && (
           <div className="tl-right">
             {!result && (
@@ -865,6 +823,150 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
                 </div>
               </div>
             )}
+          </div>
+        )}
+
+        {/* ──────── LOW MODE: SINGLE COLUMN VIEWS ──────── */}
+        {level === "low" && lowModeStep === "slides" && (
+          <div className="tl-slide-view">
+            <div className="tl-slide-card">
+              <div className="tl-slide-header">
+                <span className="tl-slide-progress">Sentence {currentSlideIndex + 1} of {segments.length}</span>
+              </div>
+
+              <div className="tl-slide-content">
+                <div className="tl-slide-english">
+                  <h3 className="tl-slide-title">Original English</h3>
+                  <p className="tl-slide-english-text">{segments[currentSlideIndex]?.originalEnglish}</p>
+                </div>
+
+                <h3 className="tl-slide-title">Choose Translation Version</h3>
+                <div className="tl-slide-options">
+                  {!sentenceOptions[currentSlideIndex] ? (
+                    <div className="tl-slide-loading">
+                      <div className="tl-spinner" /> Generating translation options...
+                    </div>
+                  ) : (
+                    sentenceOptions[currentSlideIndex].map((opt, i) => (
+                      <div
+                        key={i}
+                        className={`tl-opt-card ${selectedOptions[currentSlideIndex] === i ? 'tl-opt-card--selected' : ''}`}
+                        onClick={() => handleOptionSelect(currentSlideIndex, i)}
+                      >
+                        <p className="tl-opt-korean">{opt.korean}</p>
+                        <p className="tl-opt-bt">{opt.backTranslation}</p>
+                        <p className="tl-opt-exp">{opt.explanation}</p>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              <div className="tl-slide-footer">
+                <button
+                  className="tl-nav-btn tl-nav-btn--secondary"
+                  disabled={currentSlideIndex === 0}
+                  onClick={handlePrevSlide}
+                >
+                  ← Previous
+                </button>
+                <button
+                  className="tl-nav-btn tl-nav-btn--primary"
+                  disabled={selectedOptions[currentSlideIndex] === undefined}
+                  onClick={handleNextSlide}
+                >
+                  {currentSlideIndex < segments.length - 1 ? "Next →" : "Review Final Output →"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {level === "low" && lowModeStep === "review" && (
+          <div className="tl-review-view">
+            <div className="tl-review-card">
+              <h2 className="tl-review-title">Final Review</h2>
+              <p className="tl-review-subtitle">Here is your composed text. You can change any sentence before finalizing.</p>
+
+              <div className="tl-review-list">
+                {segments.map((seg, i) => {
+                  const selectedIdx = selectedOptions[i];
+                  const opt = sentenceOptions[i]?.[selectedIdx] || { korean: seg.korean, backTranslation: seg.backTranslation, explanation: "" };
+                  return (
+                    <div key={i} className="tl-review-row">
+                      <div className="tl-review-texts">
+                        <div className="tl-review-korean">{opt.korean}</div>
+                        <div className="tl-review-bt">{opt.backTranslation}</div>
+                      </div>
+                      <button className="tl-change-btn" onClick={() => {
+                        setCurrentSlideIndex(i);
+                        setLowModeStep('slides');
+                        setInteractionLog(log => [...log, { type: "review_change_request", sentenceIdx: i, timestamp: Date.now() }]);
+                      }}>
+                        Change
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="tl-review-footer">
+                <button className="tl-send-btn tl-send-btn--large" onClick={() => {
+                  setInteractionLog(log => [...log, { type: "document_confirmed", timestamp: Date.now() }]);
+                  console.log("[TransLucent] Document Confirmed!", interactionLog);
+                  setLowModeStep('final');
+                }}>
+                  Finalize Document
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {level === "low" && lowModeStep === "final" && (
+          <div className="tl-review-view">
+            <div className="tl-review-card" style={{ textAlign: "center" }}>
+              <div className="tl-slide-header">
+                <span className="tl-slide-progress" style={{ background: "#e0f2fe", color: "#0284c7" }}>Done</span>
+              </div>
+              <h2 className="tl-review-title" style={{ marginBottom: "24px" }}>Document Ready</h2>
+              <div className="tl-opt-card tl-opt-card--selected" style={{ textAlign: "left", marginBottom: "32px", cursor: "text" }}>
+                <p className="tl-review-korean" style={{ whiteSpace: "pre-wrap", margin: 0 }}>
+                  {segments.map((seg, i) => {
+                    const selectedIdx = selectedOptions[i];
+                    return (sentenceOptions[i]?.[selectedIdx] || { korean: seg.korean }).korean;
+                  }).join(" ")}
+                </p>
+              </div>
+
+              <div style={{ display: "flex", gap: "16px", justifyContent: "center" }}>
+                <button
+                  className="tl-nav-btn tl-nav-btn--secondary"
+                  onClick={() => {
+                    setLowModeStep('input');
+                    setInputText('');
+                    setResult(null);
+                    setSegments([]);
+                  }}
+                >
+                  Start Over
+                </button>
+                <button
+                  className="tl-send-btn tl-send-btn--large"
+                  onClick={() => {
+                    const text = segments.map((seg, i) => {
+                      const selectedIdx = selectedOptions[i];
+                      return (sentenceOptions[i]?.[selectedIdx] || { korean: seg.korean }).korean;
+                    }).join(" ");
+                    navigator.clipboard.writeText(text);
+                    setInteractionLog(log => [...log, { type: "document_copied", timestamp: Date.now() }]);
+                    alert("Copied to clipboard!");
+                  }}
+                >
+                  Copy to Clipboard
+                </button>
+              </div>
+            </div>
           </div>
         )}
       </div>
