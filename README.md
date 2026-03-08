@@ -29,44 +29,101 @@ AI to judge its own output.
 
 | Feature | Low | Mid |
 |---------|-----|-----|
-| **Situation Briefing** | Always visible — communicative norms for the situation displayed in English | On-demand — tap to see social/cultural context for a specific segment |
-| **Back-translation** | Always visible — full sentence-by-sentence English back-translation | On-demand — tap uncertain segments to see back-translation |
-| **Contextual Exploration** | OFF | On-demand drill-down: meaning → alternatives → reusable patterns |
+| **Back-translation** | Always visible — inline per sentence with Korean | On-demand — toggle per sentence via ↩ button |
+| **Norm Alignment** | Inline per sentence — explains Korean conventions used | Same data available |
+| **Follow-up Q&A** | On-demand — tap a sentence, ask free-text questions in right panel | OFF |
+| **Contextual Exploration** | OFF | On-demand — select any Korean text to drill down |
 
-### How Features Work Together
+## User Flow
 
-**Low users (Briefing + Back-translation):** The briefing provides criteria ("here's what's expected in this situation"), back-translation provides evidence ("here's what your translation actually conveys"). The user cross-references these two to assess appropriateness. The system never evaluates the translation — it gives the user two independent information sources and lets them draw their own conclusion.
+### Onboarding
 
-**Mid users (Back-translation + Exploration, Briefing available):** Back-translation serves as a quick spot-check for uncertain segments. Contextual Exploration lets users dig into specific expressions — why this word was chosen, what alternatives exist, and when the pattern can be reused. Situation Briefing is available on-demand for cultural context.
+A 2-step setup survey determines the user's proficiency level:
 
-## Features
+1. **TOPIK score** — if the user has one, they select their level (1–6); TOPIK 3+ → Mid, TOPIK 1–2 → Low.
+2. **Self-assessed reading ability** — if no TOPIK, the user picks from 4 descriptions of their Korean reading comfort (2 map to Low, 2 to Mid).
 
-### Situation Briefing
-- Provides cultural and communicative norms expected for the given context (formality conventions, honorific norms, greeting structures) without judging the translation itself
-- Norms are **specific and actionable** — they reference concrete Korean expressions used in the translation (e.g. verb endings like ~드리겠습니다, honorific markers) rather than generic advice like "use polite language"
-- Low: displayed proactively in the **right panel** alongside the translation
-- Mid: accessible on-demand per segment
+After setup, the tool launches with the appropriate feature set. A **DEV toggle** in the header allows switching between Low and Mid at any time for testing.
 
-### Back-translation
-- Translates the target language output back into the source language for meaning verification
-- Low: always visible in a **side-by-side two-column layout** (Korean | Back-translation)
-- Mid: on-demand, per segment
+### Low Mode
 
-### Contextual Exploration
-- Three-layer drill-down on any segment of the translation:
-  - **Layer 1:** What does this mean? (back-translation + token breakdown)
-  - **Layer 2:** How else could I say this? (alternative expressions with nuance/formality differences, with "Use this" swap button)
-  - **Layer 3:** When can I use this pattern again? (reusable grammar structures with examples)
-- Mid only — requires ability to read target language text
+A **split-panel layout** designed for users who cannot read Korean:
 
-## UI Architecture
+**Left panel — Translation output:**
+- Each sentence is displayed as a tappable row containing:
+  - **Korean text** (the translated sentence)
+  - **Back-translation** (English re-translation, always visible)
+  - **Norm alignment** (optional inline note explaining the Korean convention used)
+- A **review checkbox** beside each sentence lets the user mark segments as reviewed
+- A **readiness bar** at the bottom tracks progress (e.g. "Reviewed 3 of 5 segments") and shows a "Ready to send" button once all segments are checked
 
-### LLM Pipeline
+**Right panel — Follow-up Q&A:**
+- Tapping a sentence on the left selects it and opens the right panel
+- A header shows "Asking about" + the back-translation of the selected sentence, giving context
+- The user types free-text questions (e.g. "Is this too formal?", "Would a Korean reader find this rude?")
+- The LLM answers in 2–3 sentences based on the segment's context (Call 2), without judging the translation
+- Multiple Q&A pairs accumulate, most recent first
 
-Two-call architecture with split responsibilities:
+### Mid Mode
 
-1. **Call 1 (Translation):** Translates the full email, generates sentence segments with token-level data, back-translations, and situation briefing norms. The LLM infers communicative context (recipient type, formality level, social relationship) from the email content itself to calibrate honorifics and register. Uses `gpt-5-mini-2025-08-07`.
-2. **Call 2 (Exploration, Mid only):** Fetched on-demand when user taps a segment. Returns alternative expressions, grammar patterns, and cultural context. Receives the original English email as background context so that alternatives and cultural notes are grounded in the actual communicative situation, not just the Korean surface text.
+A **split-panel layout** designed for users who can partially read Korean:
+
+**Left panel — Korean translation:**
+- Each sentence is displayed with the Korean text and a **↩ toggle button** to reveal/hide its back-translation on demand
+- The Korean text is **selectable** — the user highlights any word or phrase, and a floating "Explore ▸" popup appears
+- Review checkboxes and readiness bar work the same as Low mode
+
+**Right panel — Contextual Exploration:**
+- When the user selects a phrase and clicks "Explore ▸", the right panel opens with a 3-layer drill-down:
+  - **Back-translation** (always shown) — the full sentence back-translation for context
+  - **See alternatives** (expandable) — 2–3 alternative expressions with formality level, nuance differences, and a "Use this ↵" button to swap the phrase into the translation
+  - **See grammar pattern** (expandable) — reusable grammar patterns extracted from the expression, with descriptions and examples
+  - **See cultural context** (expandable) — expression-specific cultural/social norms
+- The selected phrase is highlighted in the left panel for visual reference
+- Exploration data is fetched on-demand (Call 3) only when first expanded
+
+## LLM Pipeline
+
+Three-call architecture with split responsibilities:
+
+1. **Call 1 — Translation** (`translateText`): Translates the full email, generates sentence segments with token-level data (romanization, meaning, part-of-speech), back-translations, communicative function labels, norm alignment notes, and original English mapping. The LLM infers communicative context (recipient type, formality level, social relationship) from the email content itself.
+
+2. **Call 2 — Low Follow-Up Q&A** (`fetchLowFollowUp`): Fetched on-demand when the Low-mode user asks a question about a specific sentence. Receives the segment's original English, Korean, back-translation, and norm alignment as context. Returns a 2–3 sentence answer in plain English without evaluating the translation.
+
+3. **Call 3 — Exploration** (`fetchExploration`, Mid only): Fetched on-demand when the user selects a phrase in Mid mode. Returns alternative expressions (with formality and nuance), grammar patterns (with examples), and cultural context. Receives the tapped expression, full Korean sentence, back-translation, and original English for grounding.
+
+## Data Model
+
+```
+TranslationResult
+├── koreanTranslation: string       (full Korean email)
+└── segments: SentenceSegment[]
+    ├── korean: string              (one Korean sentence)
+    ├── backTranslation: string     (English back-translation)
+    ├── originalEnglish: string     (mapped portion of input)
+    ├── tokens: TokenData[]
+    │   ├── text: string            (Korean word/morpheme)
+    │   ├── romanization: string
+    │   ├── meaning: string
+    │   └── pos: string             (part of speech)
+    ├── communicativeFunction: string (e.g. "Greeting", "Request")
+    └── normAlignment?: string       (optional Korean convention note)
+
+ExplorationResult (Mid only, on-demand)
+├── alternatives: AlternativeExpression[]
+│   ├── korean, english, formality, nuanceDiff
+├── grammarPatterns: ReusablePattern[]
+│   ├── pattern, description, examples[]
+└── culturalContext: string
+```
+
+## Interaction Logging
+
+TransLucent logs user interactions for research purposes:
+- **Segment review** — tracks when each segment is checked/unchecked as reviewed
+- **Follow-up questions** — logs when a Low-mode user asks a question
+- **Exploration opened** — logs when a Mid-mode user opens the exploration panel
+- All events are timestamped and stored in an in-memory interaction log, output to console when the user clicks "Ready to send"
 
 ## Tech Stack
 
@@ -74,6 +131,17 @@ Two-call architecture with split responsibilities:
 - **Build tooling:** Vite (`@vitejs/plugin-react-swc`)
 - **AI API:** OpenAI (`gpt-5-mini-2025-08-07`)
 - **Styling:** Custom CSS (`src/styles.css`)
+
+## Project Structure
+
+```
+src/
+├── App.tsx               Onboarding survey + proficiency routing
+├── TranslationTool.tsx   Main translation UI (both Low and Mid modes)
+├── proficiencyEngine.ts  Proficiency level logic + feature matrix
+├── styles.css            All styling (onboarding + translation tool)
+└── main.tsx              React entry point
+```
 
 ## Getting Started
 
