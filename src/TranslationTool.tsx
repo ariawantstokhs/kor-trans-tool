@@ -16,13 +16,13 @@ interface TokenData {
 type LowModeStep = 'input' | 'slides' | 'review' | 'final';
 
 interface SentenceOption {
-  korean: string;
+  targetText: string;
   backTranslation: string;
   explanation: string;
 }
 
 interface SentenceSegment {
-  korean: string;
+  targetText: string;
   backTranslation: string;
   tokens: TokenData[];
   communicativeFunction: string;
@@ -30,12 +30,12 @@ interface SentenceSegment {
 }
 
 interface TranslationResult {
-  koreanTranslation: string;
+  targetTranslation: string;
   segments: SentenceSegment[];
 }
 
 interface AlternativeExpression {
-  korean: string;
+  targetText: string;
   english: string;
   formality: "more formal" | "similar" | "more casual";
   nuanceDiff: string;
@@ -67,6 +67,7 @@ interface ActiveExploration {
 interface TranslationToolProps {
   engine: ProficiencyEngine;
   onChangeLevel: (level: ProficiencyLevel) => void;
+  targetLanguage: string;
 }
 
 // ─── API ────────────────────────────────────────────────────────────
@@ -98,24 +99,25 @@ async function callOpenAI(systemPrompt: string, userMessage: string): Promise<st
 
 async function translateText(
   text: string,
-  level: ProficiencyLevel
+  level: ProficiencyLevel,
+  targetLanguage: string
 ): Promise<TranslationResult> {
   const contextLine = "Infer the recipient type and formality from the text content.";
 
-  const systemPrompt = `You are a Korean translation assistant specializing in professional writing.
-The user will provide a text in English (a message, document, or letter). Your task is to translate it into natural, highly professional Korean and analyze it sentence by sentence.
+  const systemPrompt = `You are a ${targetLanguage} translation assistant specializing in professional writing.
+The user will provide a text in English (a message, document, or letter). Your task is to translate it into natural, highly professional ${targetLanguage} and analyze it sentence by sentence.
 
 Respond ONLY with valid JSON matching this shape:
 {
-  "korean_translation": "<full Korean text as a single string>",
+  "target_translation": "<full ${targetLanguage} text as a single string>",
   "sentence_segments": [
     {
-      "korean": "<one Korean sentence>",
+      "target_text": "<one ${targetLanguage} sentence>",
       "back_translation": "<English back-translation of that sentence>",
-      "original_english": "<the portion of the user's original English input that this Korean segment corresponds to>",
+      "original_english": "<the portion of the user's original English input that this ${targetLanguage} segment corresponds to>",
       "tokens": [
         {
-          "text": "<Korean word/morpheme>",
+          "text": "<${targetLanguage} word/morpheme>",
           "romanization": "<romanization>",
           "meaning": "<English meaning>",
           "pos": "<part of speech>"
@@ -128,23 +130,23 @@ Respond ONLY with valid JSON matching this shape:
 
 Rules:
 - Split the input into individual sentences. Translate each separately.
-- original_english: REQUIRED for every segment. The exact portion of the user's original English input that this Korean segment translates.
-- back_translation: translate each Korean sentence back to English independently.
-- tokens: break each Korean sentence into key words/morphemes with romanization, meaning, and part-of-speech.
+- original_english: REQUIRED for every segment. The exact portion of the user's original English input that this ${targetLanguage} segment translates.
+- back_translation: translate each ${targetLanguage} sentence back to English independently.
+- tokens: break each ${targetLanguage} sentence into key words/morphemes with romanization, meaning, and part-of-speech.
 - communicative_function: REQUIRED for every segment. A short plain-English label describing the rhetorical role of this sentence in the writing (e.g. "Greeting", "Request", "Closing & gratitude").
 - Do NOT generate a document-level situation briefing. All situational information must be at the sentence level.
 - No markdown, no prose, pure JSON only.`;
 
-  const raw = await callOpenAI(systemPrompt, `Translate this professional text to Korean:\n"${text}"`);
+  const raw = await callOpenAI(systemPrompt, `Translate this professional text to ${targetLanguage}:\n"${text}"`);
   console.log("[Call 1] Raw response length:", raw.length);
   console.log("[Call 1] Raw response:", raw.substring(0, 500));
   try {
     const cleaned = raw.replace(/```json|```/g, "").trim();
     const parsed = JSON.parse(cleaned);
     return {
-      koreanTranslation: parsed.korean_translation || "",
+      targetTranslation: parsed.target_translation || "",
       segments: (parsed.sentence_segments || []).map((s: any) => ({
-        korean: s.korean || "",
+        targetText: s.target_text || "",
         backTranslation: s.back_translation || "",
         tokens: (s.tokens || []).map((t: any) => ({
           text: t.text || "",
@@ -160,8 +162,8 @@ Rules:
     console.error("[Call 1] JSON parse error:", err);
     console.log("[Call 1] Failed raw:", raw);
     return {
-      koreanTranslation: raw,
-      segments: [{ korean: raw, backTranslation: "(parsing error)", tokens: [], communicativeFunction: "" }],
+      targetTranslation: raw,
+      segments: [{ targetText: raw, backTranslation: "(parsing error)", tokens: [], communicativeFunction: "" }],
     };
   }
 }
@@ -170,36 +172,31 @@ Rules:
 
 async function generateSentenceAlternatives(
   originalEnglish: string,
-  fullEnglishText: string,
-  baseKorean: string,
+  fullText: string,
+  baseTargetText: string,
+  targetLanguage: string
 ): Promise<SentenceOption[]> {
-  const systemPrompt = `You are a Korean translation assistant. 
-The user is writing a professional document or message.
-Full text context: "${fullEnglishText}"
+  const systemPrompt = `You are a ${targetLanguage} translation assistant.
+The user is composing a document by reviewing sentence-by-sentence translations.
 
-For the specific sentence: "${originalEnglish}"
-The default Korean translation is: "${baseKorean}"
+Original English text: "${originalEnglish}"
+Full context of the English message: "${fullText}"
 
-Your task:
-1. Provide a short 1-2 sentence explanation of the nuance/tone of the default translation IN ENGLISH.
-2. Generate 2 meaningfully different alternative Korean translations for this sentence that represent different communicative choices the sender might face (e.g., different familiarity with the recipient, different relationship dynamics, different purposes). Do NOT generate alternatives that differ only in politeness level of the same expression.
-3. For each alternative, provide its back-translation to English and a short 1-2 sentence explanation of its nuance/tone and when it's appropriate IN ENGLISH.
+The default ${targetLanguage} translation generated for this sentence is: "${baseTargetText}"
 
-Respond ONLY with valid JSON matching this shape:
+Generate 2 alternative ${targetLanguage} translations that differ in tone, formulation, or nuance from the default, but are still highly professional and context-appropriate.
+Do NOT just change one word. Provide genuinely different ways to express the idea, such as a more formal version and a slightly softer/indirect version.
+
+Respond ONLY with JSON matching this shape:
 {
   "options": [
     {
-      "korean": "<default translation>",
-      "backTranslation": "<back-translation of default>",
-      "explanation": "<explanation of default translation's nuance IN ENGLISH>"
-    },
-    {
-      "korean": "<alternative 1>",
+      "target_text": "<alternative 1>",
       "backTranslation": "<back-translation 1>",
       "explanation": "<explanation 1 IN ENGLISH>"
     },
     {
-      "korean": "<alternative 2>",
+      "target_text": "<alternative 2>",
       "backTranslation": "<back-translation 2>",
       "explanation": "<explanation 2 IN ENGLISH>"
     }
@@ -210,7 +207,11 @@ No markdown, pure JSON only.`;
   const raw = await callOpenAI(systemPrompt, "Generate options.");
   try {
     const parsed = JSON.parse(raw.replace(/```json|```/g, "").trim());
-    return parsed.options || [];
+    return (parsed.options || []).map((o: any) => ({
+      targetText: o.target_text || "",
+      backTranslation: o.backTranslation || "",
+      explanation: o.explanation || ""
+    }));
   } catch (err) {
     console.error("[Call 2] Alternative generation error", err);
     return [];
@@ -221,99 +222,100 @@ No markdown, pure JSON only.`;
 
 async function fetchExploration(
   tappedExpression: string,
-  fullKoreanSentence: string,
+  fullTargetSentence: string,
   backTranslation: string,
   originalEnglish: string,
-  userQuestion: string | null
+  userQuestion: string | null,
+  targetLanguage: string
 ): Promise<ExplorationResult> {
   let systemPrompt: string;
   let userMessage: string;
 
   if (userQuestion) {
     // Branch A — Tailored mode
-    systemPrompt = `You are a helpful Korean language tutor.
-The user selected a specific expression from a Korean translation and has a specific question about it.
+    systemPrompt = `You are a helpful ${targetLanguage} language tutor.
+The user selected a specific expression from a ${targetLanguage} translation and has a specific question about it.
 
-Context:
+    Context:
 Original English: "${originalEnglish}"
-Korean Translation: "${fullKoreanSentence}"
-Back-translation: "${backTranslation}"
+${targetLanguage} Translation: "${fullTargetSentence}"
+  Back - translation: "${backTranslation}"
 Selected expression: "${tappedExpression}"
 User's question: "${userQuestion}"
 
 Respond ONLY with valid JSON:
-{
-  "explanation": "A clear, focused 2-3 sentence answer to the user's specific question about this expression.",
-  "alternatives": [
-    {
-      "korean": "<alternative expression>",
-      "english": "<english translation>",
-      "formality": "more formal|similar|more casual",
-      "nuance_diff": "<difference explanation>"
-    }
-  ],
-  "grammar_patterns": [
-    {
-      "pattern": "<reusable pattern>",
-      "description": "<when to use>",
-      "examples": ["<ex1>", "<ex2>"]
-    }
-  ],
-  "cultural_context": "<1-2 sentences, only if relevant to the question>"
-}
+  {
+    "explanation": "A clear, focused 2-3 sentence answer to the user's specific question about this expression.",
+      "alternatives": [
+        {
+          "target_text": "<alternative expression>",
+          "english": "<english translation>",
+          "formality": "more formal|similar|more casual",
+          "nuance_diff": "<difference explanation>"
+        }
+      ],
+        "grammar_patterns": [
+          {
+            "pattern": "<reusable pattern>",
+            "description": "<when to use>",
+            "examples": ["<ex1>", "<ex2>"]
+          }
+        ],
+          "cultural_context": "<1-2 sentences, only if relevant to the question>"
+  }
 
 STRICT RULES:
-- "explanation" is the PRIMARY field. Answer the user's question directly and thoroughly.
-- STRICT RULE FOR ALTERNATIVES: The "korean" field inside alternatives MUST ONLY contain the exact phrase that can be swapped directly with the selected expression. DO NOT output the full sentence.
+  - "explanation" is the PRIMARY field.Answer the user's question directly and thoroughly.
+    - STRICT RULE FOR ALTERNATIVES: The "target_text" field inside alternatives MUST ONLY contain the exact phrase that can be swapped directly with the selected expression.DO NOT output the full sentence.
 - Only include alternatives, grammar_patterns, cultural_context if they are relevant to the user's question. If not relevant, return empty array [] or empty string "".
-- All explanations in English. No markdown, pure JSON only.`;
+    - All explanations in English.No markdown, pure JSON only.`;
     userMessage = "Explore this expression.";
   } else {
     // Branch B — General mode
-    systemPrompt = `You are a Korean language tutor. The user selected a specific word or phrase in the Korean translation to learn more.
+    systemPrompt = `You are a ${targetLanguage} language tutor.The user selected a specific word or phrase in the ${targetLanguage} translation to learn more.
 Respond ONLY with valid JSON:
-{
-  "explanation": "A clear 1-2 sentence overview of what this expression means and why it was used in this context.",
-  "alternatives": [
-    {
-      "korean": "<alternative Korean expression>",
-      "english": "<English translation>",
-      "formality": "more formal|similar|more casual",
-      "nuance_diff": "<how this differs in nuance/tone>"
-    }
-  ],
-  "grammar_patterns": [
-    {
-      "pattern": "<reusable grammar pattern, e.g. ~(으)시다>",
-      "description": "<when to use this pattern>",
-      "examples": ["<example 1>", "<example 2>"]
-    }
-  ],
-  "cultural_context": "<1-2 sentences about cultural/social norms relevant to this specific expression in this context>"
-}
+  {
+    "explanation": "A clear 1-2 sentence overview of what this expression means and why it was used in this context.",
+      "alternatives": [
+        {
+          "target_text": "<alternative ${targetLanguage} expression>",
+          "english": "<English translation>",
+          "formality": "more formal|similar|more casual",
+          "nuance_diff": "<how this differs in nuance/tone>"
+        }
+      ],
+        "grammar_patterns": [
+          {
+            "pattern": "<reusable grammar pattern>",
+            "description": "<when to use this pattern>",
+            "examples": ["<example 1>", "<example 2>"]
+          }
+        ],
+          "cultural_context": "<1-2 sentences about cultural/social norms relevant to this specific expression in this context>"
+  }
 
-Rules:
-- "explanation" gives a concise overview first. The rest of the fields provide detailed drill-down.
+  Rules:
+  - "explanation" gives a concise overview first.The rest of the fields provide detailed drill - down.
 - Focus your analysis on the selected expression within its sentence context.
-- alternatives: 2-3 alternative ways to express the same idea with different formality/nuance. Present as OPTIONS, not corrections.
-- STRICT RULE FOR ALTERNATIVES: The "korean" field inside alternatives MUST ONLY contain the exact phrase that can be swapped directly with the selected expression. DO NOT output the full sentence.
-- grammar_patterns: 1-2 reusable grammar patterns from this expression with examples.
-- cultural_context: expression-specific cultural norm (formality, honorifics, social appropriateness).
-- All explanations in English. No markdown, pure JSON only.`;
+- alternatives: 2 - 3 alternative ways to express the same idea with different formality / nuance.Present as OPTIONS, not corrections.
+- STRICT RULE FOR ALTERNATIVES: The "target_text" field inside alternatives MUST ONLY contain the exact phrase that can be swapped directly with the selected expression.DO NOT output the full sentence.
+- grammar_patterns: 1 - 2 reusable grammar patterns from this expression with examples.
+- cultural_context: expression - specific cultural norm(formality, honorifics, social appropriateness).
+- All explanations in English.No markdown, pure JSON only.`;
 
     userMessage = `Selected expression: "${tappedExpression}"
-Full Korean sentence: "${fullKoreanSentence}"
-Back-translation: "${backTranslation}"
+Full ${targetLanguage} sentence: "${fullTargetSentence}"
+  Back - translation: "${backTranslation}"
 Original English: "${originalEnglish}"`;
   }
 
   const raw = await callOpenAI(systemPrompt, userMessage);
   try {
-    const parsed = JSON.parse(raw.replace(/```json|```/g, "").trim());
+    const parsed = JSON.parse(raw.replace(/```json | ```/g, "").trim());
     return {
       explanation: parsed.explanation || "",
       alternatives: (parsed.alternatives || []).map((a: any) => ({
-        korean: a.korean || "",
+        targetText: a.target_text || "",
         english: a.english || "",
         formality: a.formality || "similar",
         nuanceDiff: a.nuance_diff || "",
@@ -344,7 +346,7 @@ const ModeBadge = ({ mode }: { mode: FeatureMode }) => {
       display: "inline-flex", alignItems: "center", gap: 5,
       fontSize: 10, color, padding: "2px 8px",
       borderRadius: 999, background: color + "15",
-      border: `1px solid ${color}30`, fontWeight: 700,
+      border: `1px solid ${color} 30`, fontWeight: 700,
       letterSpacing: "0.06em",
     }}>
       <span style={{ width: 5, height: 5, borderRadius: "50%", background: color }} />
@@ -359,7 +361,7 @@ const ModeBadge = ({ mode }: { mode: FeatureMode }) => {
 
 // ─── Main Component ──────────────────────────────────────────────────────────
 
-export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChangeLevel }) => {
+export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChangeLevel, targetLanguage }) => {
   const [inputText, setInputText] = useState("");
   const [result, setResult] = useState<TranslationResult | null>(null);
   const [segments, setSegments] = useState<SentenceSegment[]>([]);
@@ -400,7 +402,7 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
     setReviewedSegments(new Set());
     setInteractionLog([]);
     try {
-      const res = await translateText(inputText, level);
+      const res = await translateText(inputText, level, targetLanguage);
       setResult(res);
       setSegments([...res.segments]);
       if (level === 'low' && res.segments.length > 0) {
@@ -466,10 +468,11 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
 
     fetchExploration(
       newExploration.text,
-      seg.korean,
+      seg.targetText,
       seg.backTranslation,
       seg.originalEnglish || inputText,
-      question
+      question,
+      targetLanguage
     ).then((res) => {
       setActiveExplorations((prev) =>
         prev.map(exp => exp.id === newId ? { ...exp, result: res, loading: false } : exp)
@@ -495,10 +498,11 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
     try {
       const res = await fetchExploration(
         text,
-        seg.korean,
+        seg.targetText,
         seg.backTranslation,
         seg.originalEnglish || inputText,
-        userQuestion
+        userQuestion,
+        targetLanguage
       );
       setActiveExplorations((prev) => prev.map(e => e.id === id ? { ...e, result: res, loading: false } : e));
     } catch {
@@ -521,16 +525,16 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
     setActiveExplorations((prev) => prev.map(exp => exp.id === id ? { ...exp, expandedSections: next } : exp));
   };
 
-  const handleReplaceSegment = (id: string, segIdx: number, textToReplace: string, altKorean: string) => {
+  const handleReplaceSegment = (id: string, segIdx: number, textToReplace: string, altTargetText: string) => {
     // Strip leading and trailing ellipses or spaces that the AI might generate
-    const cleanedAlt = altKorean.replace(/^[.\s]+/, '').replace(/[.\s]+$/, '');
+    const cleanedAlt = altTargetText.replace(/^[.\s]+/, '').replace(/[.\s]+$/, '');
     setSegments((prev) => {
       const next = [...prev];
-      const oldKorean = next[segIdx].korean;
+      const oldTargetText = next[segIdx].targetText;
       // If the AI accidentally returned the whole sentence instead of just the phrase,
       // a simple replace might create duplicates or inject weirdness.
       // But standard replace is the safest fallback.
-      next[segIdx] = { ...next[segIdx], korean: oldKorean.replace(textToReplace, cleanedAlt) };
+      next[segIdx] = { ...next[segIdx], targetText: oldTargetText.replace(textToReplace, cleanedAlt) };
       return next;
     });
     setActiveExplorations((prev) => prev.map(e => e.id === id ? { ...e, text: cleanedAlt } : e));
@@ -570,11 +574,11 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
     fetchingOptions.current.add(idx);
     const seg = segs[idx];
     if (!seg.originalEnglish) {
-      setSentenceOptions(prev => ({ ...prev, [idx]: [{ korean: seg.korean, backTranslation: seg.backTranslation, explanation: "Standard translation." }] }));
+      setSentenceOptions(prev => ({ ...prev, [idx]: [{ targetText: seg.targetText, backTranslation: seg.backTranslation, explanation: "Standard translation." }] }));
       return;
     }
-    const opts = await generateSentenceAlternatives(seg.originalEnglish, text, seg.korean);
-    const validOpts = opts.length > 0 ? opts : [{ korean: seg.korean, backTranslation: seg.backTranslation, explanation: "Standard translation." }];
+    const opts = await generateSentenceAlternatives(seg.originalEnglish, text, seg.targetText, targetLanguage);
+    const validOpts = opts.length > 0 ? opts : [{ targetText: seg.targetText, backTranslation: seg.backTranslation, explanation: "Standard translation." }];
     setSentenceOptions(prev => ({ ...prev, [idx]: validOpts }));
   }, [sentenceOptions]);
 
@@ -637,7 +641,7 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
             <button
               key={l}
               onClick={() => onChangeLevel(l)}
-              className={`tl-level-btn ${level === l ? "tl-level-btn--active" : ""}`}
+              className={`tl-level-btn ${level === l ? "tl-level-btn--active" : ""} `}
             >
               {l === "low" ? "A" : "B"}
             </button>
@@ -648,7 +652,7 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
       </header>
 
       {/* ── Content ── */}
-      <div className={`tl-content ${level === "mid" || (level === "low" && lowModeStep === "input") ? "tl-content--split" : "tl-content--single"}`}>
+      <div className={`tl-content ${level === "mid" || (level === "low" && lowModeStep === "input") ? "tl-content--split" : "tl-content--single"} `}>
 
         {/* ── Unified Landing input (before translation) ── */}
         {!result && !loading && (level === "mid" || lowModeStep === "input") && (
@@ -697,7 +701,7 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
             <div className="tl-card">
               <div className="tl-mid-header-row">
                 <label className="tl-label">
-                  Korean Translation
+                  {targetLanguage} Translation
                   <span className="tl-label-hint"> — select a word to explore</span>
                 </label>
                 <button
@@ -716,7 +720,7 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
                 {segments.map((seg, i) => (
                   <div key={i} className="tl-segment-wrapper">
                     <button
-                      className={`tl-review-icon-btn ${reviewedSegments.has(i) ? "tl-review-icon-btn--checked" : ""}`}
+                      className={`tl-review-icon-btn ${reviewedSegments.has(i) ? "tl-review-icon-btn--checked" : ""} `}
                       onClick={() => toggleReview(i)}
                       aria-label={reviewedSegments.has(i) ? "Unmark as reviewed" : "Mark as reviewed"}
                     >
@@ -726,18 +730,16 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
                       className="tl-sentence"
                       data-seg-idx={i}
                     >
-                      <div className="tl-korean tl-korean--selectable">
+                      <div className="tl-target tl-target--selectable">
                         {(() => {
-                          const phrasesToHighlight = Array.from(new Set(
-                            activeExplorations
-                              .filter(e => e.segIdx === i && seg.korean.includes(e.text))
-                              .map(e => e.text)
-                              .concat(selectionPopup && selectionPopup.segIdx === i && seg.korean.includes(selectionPopup.text) ? [selectionPopup.text] : [])
-                          ));
+                          const phrasesToHighlight = activeExplorations
+                            .filter(e => e.segIdx === i && seg.targetText.includes(e.text))
+                            .map(e => e.text)
+                            .concat(selectionPopup && selectionPopup.segIdx === i && seg.targetText.includes(selectionPopup.text) ? [selectionPopup.text] : []);
 
-                          if (phrasesToHighlight.length === 0) return seg.korean;
+                          if (phrasesToHighlight.length === 0) return seg.targetText;
 
-                          let elements: (React.ReactNode)[] = [seg.korean];
+                          let elements: (React.ReactNode)[] = [seg.targetText];
                           phrasesToHighlight.forEach((phrase, hIdx) => {
                             const newElements: React.ReactNode[] = [];
                             elements.forEach(el => {
@@ -746,7 +748,7 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
                                 for (let p = 0; p < parts.length; p++) {
                                   newElements.push(parts[p]);
                                   if (p < parts.length - 1) {
-                                    newElements.push(<mark key={`${hIdx}-${p}`} className="tl-highlight">{phrase}</mark>);
+                                    newElements.push(<mark key={`${hIdx} -${p} `} className="tl-highlight">{phrase}</mark>);
                                   }
                                 }
                               } else {
@@ -808,7 +810,7 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
             {activeExplorations.length === 0 && (
               <div className="tl-empty-state">
                 <div className="tl-empty-icon">←</div>
-                <div>Select a Korean word to explore it</div>
+                <div>Select a {targetLanguage} word to explore it</div>
               </div>
             )}
 
@@ -851,7 +853,7 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
                   >
                     <span className="tl-fp-section-icon">↩</span>
                     <span className="tl-fp-section-title">Back-translation</span>
-                    <span className={`tl-chevron ${exp.expandedSections.has("bt") ? "tl-chevron--open" : ""}`}>▸</span>
+                    <span className={`tl-chevron ${exp.expandedSections.has("bt") ? "tl-chevron--open" : ""} `}>▸</span>
                   </div>
                   {exp.expandedSections.has("bt") && (
                     <div className="tl-fp-section-body">
@@ -869,7 +871,7 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
                     >
                       <span className="tl-fp-section-icon">↔</span>
                       <span className="tl-fp-section-title">See alternatives</span>
-                      <span className={`tl-chevron ${exp.expandedSections.has("alternatives") ? "tl-chevron--open" : ""}`}>▸</span>
+                      <span className={`tl-chevron ${exp.expandedSections.has("alternatives") ? "tl-chevron--open" : ""} `}>▸</span>
                     </div>
                     {exp.expandedSections.has("alternatives") && (
                       <div className="tl-fp-section-body">
@@ -880,10 +882,10 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
                           </div>
                         )}
                         {exp.result && exp.result.alternatives.map((alt, i) => {
-                          const cleanedAlt = alt.korean.replace(/^[.\s]+/, '').replace(/[.\s]+$/, '');
+                          const cleanedAlt = alt.targetText.replace(/^[.\s]+/, '').replace(/[.\s]+$/, '');
                           return (
                             <div key={i} className="tl-alt-card">
-                              <div className="tl-alt-korean">{cleanedAlt}</div>
+                              <div className="tl-alt-target">{cleanedAlt}</div>
                               <div className="tl-alt-english">{alt.english}</div>
                               <div className="tl-alt-nuance">{alt.nuanceDiff}</div>
                               <button
@@ -909,7 +911,7 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
                     >
                       <span className="tl-fp-section-icon">≡</span>
                       <span className="tl-fp-section-title">See grammar pattern</span>
-                      <span className={`tl-chevron ${exp.expandedSections.has("grammar") ? "tl-chevron--open" : ""}`}>▸</span>
+                      <span className={`tl-chevron ${exp.expandedSections.has("grammar") ? "tl-chevron--open" : ""} `}>▸</span>
                     </div>
                     {exp.expandedSections.has("grammar") && (
                       <div className="tl-fp-section-body">
@@ -944,7 +946,7 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
                     >
                       <span className="tl-fp-section-icon">∞</span>
                       <span className="tl-fp-section-title">See cultural context</span>
-                      <span className={`tl-chevron ${exp.expandedSections.has("cultural") ? "tl-chevron--open" : ""}`}>▸</span>
+                      <span className={`tl-chevron ${exp.expandedSections.has("cultural") ? "tl-chevron--open" : ""} `}>▸</span>
                     </div>
                     {exp.expandedSections.has("cultural") && (
                       <div className="tl-fp-section-body">
@@ -989,17 +991,20 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
                       <div className="tl-spinner" /> Generating translation options...
                     </div>
                   ) : (
-                    sentenceOptions[currentSlideIndex].map((opt, i) => (
-                      <div
-                        key={i}
-                        className={`tl-opt-card ${selectedOptions[currentSlideIndex] === i ? 'tl-opt-card--selected' : ''}`}
-                        onClick={() => handleOptionSelect(currentSlideIndex, i)}
-                      >
-                        <p className="tl-opt-korean">{opt.korean}</p>
-                        <p className="tl-opt-bt">{opt.backTranslation}</p>
-                        <p className="tl-opt-exp">{opt.explanation}</p>
-                      </div>
-                    ))
+                    sentenceOptions[currentSlideIndex].map((opt, i) => {
+                      const isSelected = selectedOptions[currentSlideIndex] === i;
+                      return (
+                        <div
+                          key={i}
+                          className={"tl-opt-card" + (isSelected ? " tl-opt-card--selected" : "")}
+                          onClick={() => handleOptionSelect(currentSlideIndex, i)}
+                        >
+                          <p className="tl-opt-target">{opt.targetText}</p>
+                          <p className="tl-opt-bt">{opt.backTranslation}</p>
+                          <p className="tl-opt-exp">{opt.explanation}</p>
+                        </div>
+                      );
+                    })
                   )}
                 </div>
               </div>
@@ -1033,11 +1038,11 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
               <div className="tl-review-list">
                 {segments.map((seg, i) => {
                   const selectedIdx = selectedOptions[i];
-                  const opt = sentenceOptions[i]?.[selectedIdx] || { korean: seg.korean, backTranslation: seg.backTranslation, explanation: "" };
+                  const opt = sentenceOptions[i]?.[selectedIdx] || { targetText: seg.targetText, backTranslation: seg.backTranslation, explanation: "" };
                   return (
                     <div key={i} className="tl-review-row">
                       <div className="tl-review-texts">
-                        <div className="tl-review-korean">{opt.korean}</div>
+                        <div className="tl-review-target">{opt.targetText}</div>
                         <div className="tl-review-bt">{opt.backTranslation}</div>
                       </div>
                       <button className="tl-change-btn" onClick={() => {
@@ -1073,10 +1078,10 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
               </div>
               <h2 className="tl-review-title" style={{ marginBottom: "24px" }}>Document Ready</h2>
               <div className="tl-opt-card tl-opt-card--selected" style={{ textAlign: "left", marginBottom: "32px", cursor: "text" }}>
-                <p className="tl-review-korean" style={{ whiteSpace: "pre-wrap", margin: 0 }}>
+                <p className="tl-review-target" style={{ whiteSpace: "pre-wrap", margin: 0 }}>
                   {segments.map((seg, i) => {
                     const selectedIdx = selectedOptions[i];
-                    return (sentenceOptions[i]?.[selectedIdx] || { korean: seg.korean }).korean;
+                    return (sentenceOptions[i]?.[selectedIdx] || { targetText: seg.targetText }).targetText;
                   }).join(" ")}
                 </p>
               </div>
@@ -1096,11 +1101,11 @@ export const TranslationTool: React.FC<TranslationToolProps> = ({ engine, onChan
                 <button
                   className="tl-send-btn tl-send-btn--large"
                   onClick={() => {
-                    const text = segments.map((seg, i) => {
-                      const selectedIdx = selectedOptions[i];
-                      return (sentenceOptions[i]?.[selectedIdx] || { korean: seg.korean }).korean;
+                    const theText = segments.map((seg, i) => {
+                      const selectedIdx = selectedOptions[i] ?? 0;
+                      return (sentenceOptions[i]?.[selectedIdx] || { targetText: seg.targetText }).targetText;
                     }).join(" ");
-                    navigator.clipboard.writeText(text);
+                    navigator.clipboard.writeText(theText);
                     setInteractionLog(log => [...log, { type: "document_copied", timestamp: Date.now() }]);
                     alert("Copied to clipboard!");
                   }}

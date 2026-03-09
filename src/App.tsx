@@ -2,24 +2,26 @@ import React, { useState, useRef, useEffect, useCallback } from "react";
 import { TranslationTool } from "./TranslationTool";
 import { createEngine, deriveLevelFromSurvey, ProficiencyLevel, ProficiencyEngine } from "./proficiencyEngine";
 
-type StepId = 1 | 2;
+type StepId = 1 | 2 | 3;
 
 const readingOptions = [
-  { label: "I can't read Korean, or only recognize a few words", level: "low" as const },
-  { label: "I can read Korean but often need help understanding", level: "low" as const },
-  { label: "I can read and mostly understand everyday Korean text", level: "mid" as const },
-  { label: "I can read most Korean texts, though formal writing is sometimes difficult", level: "mid" as const },
+  { label: "I can't read it, or only recognize a few words", level: "low" as const },
+  { label: "I can read it but often need help understanding", level: "low" as const },
+  { label: "I can read and mostly understand everyday text", level: "mid" as const },
+  { label: "I can read most texts, though formal writing is sometimes difficult", level: "mid" as const },
 ];
 
 const topikLevels = [1, 2, 3, 4, 5, 6] as const;
 
 const stepsMeta: { id: StepId; title: string; subtitle: string }[] = [
-  { id: 1, title: "Korean level", subtitle: "A quick check on your proficiency" },
-  { id: 2, title: "Ready!", subtitle: "We'll set up your personalised tool" },
+  { id: 1, title: "Language", subtitle: "Language to translate to" },
+  { id: 2, title: "Your level", subtitle: "A quick check on your proficiency" },
+  { id: 3, title: "Ready!", subtitle: "We'll set up your personalised tool" },
 ];
 
 export const App: React.FC = () => {
   const [currentStep, setCurrentStep] = useState<StepId>(1);
+  const [targetLanguage, setTargetLanguage] = useState<string | null>(null);
   const [hasTopik, setHasTopik] = useState<boolean | null>(null);
   const [topikLevel, setTopikLevel] = useState<number | null>(null);
   const [readingChoice, setReadingChoice] = useState<number | null>(null);
@@ -57,8 +59,10 @@ export const App: React.FC = () => {
   const goNext = () => {
     if (currentStep === 1) {
       setCurrentStep(2);
+    } else if (currentStep === 2) {
+      setCurrentStep(3);
     } else {
-      const surveyData = { hasTopik, topikLevel, readingChoice };
+      const surveyData = { targetLanguage: targetLanguage ?? "Korean", hasTopik, topikLevel, readingChoice };
       const level = deriveLevelFromSurvey(surveyData);
       setEngine(createEngine(level, surveyData));
     }
@@ -68,8 +72,10 @@ export const App: React.FC = () => {
     setCurrentStep((prev) => (prev > 1 ? (prev - 1) as StepId : prev));
   };
 
-  // Can the user proceed from step 1?
-  const canProceedStep1 = hasTopik === true ? topikLevel !== null : hasTopik === false ? readingChoice !== null : false;
+  // Can the user proceed from current step?
+  const canProceedStep1 = targetLanguage !== null;
+  const canProceedStep2 = hasTopik === true ? topikLevel !== null : hasTopik === false ? readingChoice !== null : false;
+  const canProceed = currentStep === 1 ? canProceedStep1 : currentStep === 2 ? canProceedStep2 : true;
 
   const handleChangeLevel = (level: ProficiencyLevel) => {
     if (!engine) return;
@@ -77,7 +83,7 @@ export const App: React.FC = () => {
   };
 
   if (engine) {
-    return <TranslationTool engine={engine} onChangeLevel={handleChangeLevel} />;
+    return <TranslationTool engine={engine} onChangeLevel={handleChangeLevel} targetLanguage={targetLanguage ?? "Korean"} />;
   }
 
   const renderStepContent = () => {
@@ -86,7 +92,32 @@ export const App: React.FC = () => {
         <section className="question-section">
           <header className="question-header">
             <div className="question-meta"><span className="question-number">01</span></div>
-            <h2>Do you have a TOPIK score?</h2>
+            <h2>What language are you writing in?</h2>
+          </header>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 24 }}>
+            {["Korean", "Spanish"].map((lang) => (
+              <button
+                key={lang}
+                className={"scale-pill" + (targetLanguage === lang ? " scale-pill--active" : "")}
+                onClick={() => setTargetLanguage(lang)}
+                style={{ padding: "10px 18px", minWidth: "auto", textAlign: "left" }}
+              >
+                {lang}
+              </button>
+            ))}
+          </div>
+        </section>
+      );
+    }
+
+    if (currentStep === 2) {
+      const examName = targetLanguage === "Spanish" ? "DELE/SIELE" : "TOPIK";
+      return (
+        <section className="question-section">
+          <header className="question-header">
+            <div className="question-meta"><span className="question-number">02</span></div>
+            <h2>Do you have an official {examName} score?</h2>
           </header>
 
           <div style={{ display: "flex", gap: 10, marginBottom: 24 }}>
@@ -128,7 +159,7 @@ export const App: React.FC = () => {
           {hasTopik === false && (
             <>
               <p className="paragraph" style={{ marginBottom: 8 }}>
-                How well can you read Korean?
+                How well can you read {targetLanguage}?
               </p>
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                 {readingOptions.map((opt, idx) => (
@@ -151,11 +182,11 @@ export const App: React.FC = () => {
     return (
       <section className="question-section">
         <header className="question-header">
-          <div className="question-meta"><span className="question-number">02</span></div>
+          <div className="question-meta"><span className="question-number">03</span></div>
           <h2>You're all set!</h2>
         </header>
         <p className="paragraph">
-          Based on your answers, we'll tailor the translation tools to match your comfort level with Korean.
+          Based on your answers, we'll tailor the translation tools to match your comfort level with {targetLanguage}.
         </p>
         <p className="paragraph" style={{ marginTop: 12 }}>
           Hit "Launch" to open TransLucent.
@@ -204,9 +235,9 @@ export const App: React.FC = () => {
             <button
               className="primary-button"
               onClick={goNext}
-              disabled={currentStep === 1 && !canProceedStep1}
+              disabled={!canProceed}
             >
-              {currentStep === 2 ? "Launch tool" : "Next"} <span className="arrow arrow-right" />
+              {currentStep === 3 ? "Launch tool" : "Next"} <span className="arrow arrow-right" />
             </button>
           </footer>
         </main>

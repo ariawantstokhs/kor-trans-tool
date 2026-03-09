@@ -29,6 +29,7 @@ export interface ProficiencyEngine {
   level: ProficiencyLevel;
   features: FeatureFlags;
   surveyData: {
+    targetLanguage?: string;
     hasTopik?: boolean | null;
     topikLevel?: number | null;
     readingChoice?: number | null;
