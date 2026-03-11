@@ -147,11 +147,10 @@ export function RoadMap({ totalNodes, currentNodeIndex, nodeLabels, phase }: Roa
         {/* Car */}
         <div 
           className="absolute z-20 text-3xl transition-all duration-700 ease-in-out -translate-x-1/2 -translate-y-1/2"
-          style={{ 
-            left: carPosition.x, 
+          style={{
+            left: carPosition.x,
             top: carPosition.y,
-            // Add a little bounce when moving
-            transform: `translate(-50%, -50%) ${phase !== 'ARRIVAL' ? 'scale(1.1)' : 'scale(1)'}`
+            transform: `translate(-50%, -50%) scaleX(-1) ${phase !== 'ARRIVAL' ? 'scale(1.1)' : 'scale(1)'}`
           }}
         >
           🚗

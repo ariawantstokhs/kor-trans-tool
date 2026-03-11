@@ -10,7 +10,7 @@ import {
   RouteHistory
 } from './api';
 import { 
-  Sparkles, IterationCw, ChevronRight, ChevronLeft, 
+  Sparkles, IterationCw, ChevronRight,
   MessageSquare, Copy, RefreshCcw, ArrowRight, Play
 } from 'lucide-react';
 import { cx } from './utils';
@@ -40,6 +40,7 @@ export function App() {
   const [isTranslating, setIsTranslating] = useState(false);
   const [isGeneratingOptions, setIsGeneratingOptions] = useState(false);
   const [customMoveInstruction, setCustomMoveInstruction] = useState('');
+  const [cardTooltip, setCardTooltip] = useState<{opt: MoveOption, rect: DOMRect} | null>(null);
 
   useEffect(() => {
     handleLoadScenario('A');
@@ -203,6 +204,22 @@ export function App() {
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col font-sans selection:bg-blue-200 overflow-x-hidden">
+      {/* Fixed card tooltip — rendered outside overflow-hidden containers */}
+      {cardTooltip && (
+        <div
+          className="fixed z-[9999] pointer-events-none w-[260px] bg-slate-900 text-white rounded-xl p-3 shadow-xl"
+          style={{
+            left: cardTooltip.rect.left + cardTooltip.rect.width / 2,
+            top: cardTooltip.rect.top - 10,
+            transform: 'translate(-50%, -100%)',
+          }}
+        >
+          <p className="text-[11px] font-bold mb-1 text-slate-300">{cardTooltip.opt.name}</p>
+          <p className="text-[11px] leading-[1.6] text-slate-200 mb-1.5">{cardTooltip.opt.description}</p>
+          <p className="text-[11px] italic text-slate-400">"{cardTooltip.opt.back_translation}"</p>
+          <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-900" />
+        </div>
+      )}
       {/* Header */}
       <header className="bg-white/80 backdrop-blur-md border-b border-slate-200 shadow-sm sticky top-0 z-30 transition-all">
         <div className="max-w-4xl mx-auto px-6 py-4 flex items-center justify-between">
@@ -344,10 +361,12 @@ export function App() {
 
         {/* Phase: NAVIGATING Crossroads */}
         {phase === 'NAVIGATING' && analysisData && (
-          <div className="w-full h-[80vh] min-h-[600px] mt-4 relative bg-[#F0EFEA] rounded-[2rem] overflow-hidden border border-slate-200/60 shadow-2xl animate-in fade-in zoom-in-95 duration-500 flex flex-col justify-end ring-1 ring-black/5">
-            
-            {/* Map Background Pattern (subtle grid to ground it + map texture feeling) */}
-            <div className="absolute inset-x-0 bottom-0 h-full opacity-30 pointer-events-none bg-[radial-gradient(#d4d4d8_1px,transparent_1px)] [background-size:24px_24px] [mask-image:linear-gradient(to_bottom,transparent,black_20%,black_80%,transparent)]" />
+          <div className="w-full h-[65vh] min-h-[500px] mt-4 relative bg-[#EEEEE8] rounded-[2rem] overflow-hidden border border-slate-200/60 shadow-xl animate-in fade-in zoom-in-95 duration-500 flex flex-col justify-end ring-1 ring-black/5">
+
+            {/* Map-like background: subtle grid */}
+            <div className="absolute inset-0 pointer-events-none opacity-[0.12]" style={{ backgroundImage: 'linear-gradient(#6b7280 1px, transparent 1px), linear-gradient(to right, #6b7280 1px, transparent 1px)', backgroundSize: '40px 40px' }} />
+            {/* Lower half slightly darker — "road ahead" depth */}
+            <div className="absolute inset-x-0 bottom-0 h-1/2 pointer-events-none" style={{ background: 'linear-gradient(to top, rgba(0,0,0,0.04), transparent)' }} />
 
             {/* Dynamic Map Area */}
             <div className={cx(
@@ -355,173 +374,149 @@ export function App() {
               previewOption ? "opacity-30 blur-[1px]" : ""
             )}>
               
-               {/* Route Path (SVG) */}
+               {/* Route connectors (minimal thin lines) */}
                <div className="absolute inset-x-0 bottom-[140px] top-0 pointer-events-none flex justify-center">
-                  <svg className="w-full max-w-[1000px] h-full overflow-visible" viewBox="0 0 1000 600" preserveAspectRatio="none">
- 
-                    {/* Branches (unselected paths first) */}
-                    {(analysisData.moves[currentMoveIndex].options || []).map((_, idx, arr) => {
-                       const count = arr.length;
-                       let tX = 500;
-                       if (count === 2) tX = idx === 0 ? 300 : 700;
-                       if (count === 3) tX = idx === 0 ? 220 : (idx === 1 ? 500 : 780);
+                  <svg className="w-full max-w-[1000px] h-full" viewBox="0 0 1000 600" preserveAspectRatio="none">
+                    {(() => {
+                      const options = analysisData.moves[currentMoveIndex].options || [];
+                      const count = options.length;
+                      const selectedIdx = options.findIndex(o => o.name === selectedOptionInfo?.name);
 
-                       const isSelected = selectedOptionInfo?.name === arr[idx].name;
-                       // Junction at y=440, branch tips at y=210 (aligns with cards at top-[180px])
-                       const d = `M500,440 C500,340 ${tX},280 ${tX},210`;
+                      // Road renderer: asphalt base + white lane markings
+                      const Road = ({ d, selected, isMain }: { d: string; selected?: boolean; isMain?: boolean }) => (
+                        <>
+                          <path d={d} fill="none" stroke={isMain ? "#1e3a5f" : selected ? "#1e3a5f" : "#6B7280"} strokeWidth={isMain ? "22" : "20"} strokeLinecap="round" />
+                          <path d={d} fill="none" stroke={isMain ? "#2563EB" : selected ? "#3B82F6" : "#9CA3AF"} strokeWidth={isMain ? "16" : "14"} strokeLinecap="round" />
+                          <path d={d} fill="none" stroke="white" strokeWidth="2.5" strokeDasharray="18 12" strokeLinecap="round" opacity={isMain ? "0.8" : selected ? "0.9" : "0.5"} />
+                        </>
+                      );
 
-                       if (!isSelected) {
-                         return (
-                           <g key={`path-unselected-${idx}`}>
-                             <path d={d} stroke="#CBD5E1" strokeWidth="26" strokeLinecap="round" fill="none" opacity="0.8" />
-                             <path d={d} stroke="#FFFFFF" strokeWidth="20" strokeLinecap="round" fill="none" />
-                           </g>
-                         );
-                       }
-                       return null;
-                    })}
+                      if (count === 3) {
+                        const jY = 400, cY = 110, lX = 140, rX = 860;
+                        const paths = [
+                          `M500,${jY} L${lX},${jY}`,
+                          `M500,${jY} L500,${cY}`,
+                          `M500,${jY} L${rX},${jY}`,
+                        ];
+                        return (
+                          <>
+                            <Road d={`M500,600 L500,${jY}`} isMain />
+                            {paths.map((d, i) => (
+                              <Road key={i} d={d} selected={selectedIdx === i} />
+                            ))}
+                            {/* Junction circle */}
+                            <circle cx="500" cy={jY} r="12" fill="#1D4ED8" stroke="#BFDBFE" strokeWidth="4" />
+                            <circle cx="500" cy={jY} r="5" fill="white" />
+                          </>
+                        );
+                      }
 
-                    {/* Branches (selected path on top) */}
-                    {(analysisData.moves[currentMoveIndex].options || []).map((_, idx, arr) => {
-                       const count = arr.length;
-                       let tX = 500;
-                       if (count === 2) tX = idx === 0 ? 300 : 700;
-                       if (count === 3) tX = idx === 0 ? 220 : (idx === 1 ? 500 : 780);
+                      // 2-option
+                      const jY = 380, tipY = 160;
+                      const tips = count === 2 ? [270, 730] : [500];
+                      return (
+                        <>
+                          <Road d={`M500,600 L500,${jY}`} isMain />
+                          {tips.map((tX, i) => {
+                            const d = `M500,${jY} C500,${jY-80} ${tX},${tipY+60} ${tX},${tipY}`;
+                            return <Road key={i} d={d} selected={selectedIdx === i} />;
+                          })}
+                          <circle cx="500" cy={jY} r="12" fill="#1D4ED8" stroke="#BFDBFE" strokeWidth="4" />
+                          <circle cx="500" cy={jY} r="5" fill="white" />
+                        </>
+                      );
+                    })()}
+                  </svg>
+               </div>
 
-                       const isSelected = selectedOptionInfo?.name === arr[idx].name;
-                       const d = `M500,440 C500,340 ${tX},280 ${tX},210`;
-
-                       if (isSelected) {
-                         return (
-                           <g key={`path-selected-${idx}`} style={{ zIndex: 10 }}>
-                             <path d={d} stroke="#BFDBFE" strokeWidth="36" strokeLinecap="round" fill="none" opacity="0.6" />
-                             <path d={d} stroke="#3B82F6" strokeWidth="20" strokeLinecap="round" fill="none" />
-                           </g>
-                         );
-                       }
-                       return null;
-                    })}
-
-                    {/* Main Stem from car to junction */}
-                    <g>
-                      <path d="M500,600 L500,440" stroke="#BFDBFE" strokeWidth="36" strokeLinecap="round" fill="none" opacity="0.6" />
-                      <path d="M500,600 L500,440" stroke="#3B82F6" strokeWidth="20" strokeLinecap="round" fill="none" />
-                    </g>
-
-                    {/* Invisible Hit Areas for clicking paths directly */}
-                    {(analysisData.moves[currentMoveIndex].options || []).map((_, idx, arr) => {
-                       const count = arr.length;
-                       let tX = 500;
-                       if (count === 2) tX = idx === 0 ? 300 : 700;
-                       if (count === 3) tX = idx === 0 ? 220 : (idx === 1 ? 500 : 780);
-                       const d = `M500,440 C500,340 ${tX},280 ${tX},210`;
-                       
-                       return (
-                         <path 
-                           key={`path-hit-${idx}`} 
-                           d={d} 
-                           stroke="transparent" 
-                           strokeWidth="40" 
-                           strokeLinecap="round" 
-                           fill="none" 
-                           className="cursor-pointer pointer-events-auto"
-                           onClick={() => handleOptionClick(arr[idx])}
-                         />
-                       );
-                    })}
-                 </svg>
-              </div>
-
-              {/* Inline Loading Badge for Route Generation */}
+              {/* Inline Loading Badge */}
               {isGeneratingOptions && (
-                <div className="absolute w-full top-[180px] flex justify-center h-0 pointer-events-none px-4 box-border z-20">
-                  <div className="bg-white/90 backdrop-blur-md px-6 py-4 rounded-full shadow-[0_8px_30px_rgb(0,0,0,0.12)] border border-slate-200/60 transform -translate-y-1/2 flex items-center gap-3">
+                <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-20">
+                  <div className="bg-white/90 backdrop-blur-md px-6 py-4 rounded-full shadow-[0_8px_30px_rgb(0,0,0,0.12)] border border-slate-200/60 flex items-center gap-3">
                     <IterationCw className="w-5 h-5 text-blue-500 animate-spin" />
-                    <p className="font-bold text-slate-700 text-sm">Calculating route options based on context...</p>
+                    <p className="font-bold text-slate-700 text-sm">Calculating route options...</p>
                   </div>
                 </div>
               )}
 
-              {/* Branch Cards (Apple Maps POI style) - Now wider to fit screen edges safely */}
-              <div className="absolute w-full top-[180px] flex justify-center h-0 pointer-events-none px-4 box-border">
-                <div className="w-full max-w-[1000px] relative">
-                  {(analysisData.moves[currentMoveIndex].options || []).map((opt, idx, arr) => {
-                       const count = arr.length;
-                       let left = '50%';
-                       if (count === 2) left = idx === 0 ? '30%' : '70%';
-                       if (count === 3) left = idx === 0 ? '22%' : (idx === 1 ? '50%' : '78%');
+              {/* Branch Cards — positioned per-card for T-intersection layout */}
+              <div className="absolute inset-0 pointer-events-none">
+                {(analysisData.moves[currentMoveIndex].options || []).map((opt, idx, arr) => {
+                     const count = arr.length;
 
-                       const isSelected = selectedOptionInfo?.name === opt.name;
-                       const isRecommended = analysisData.moves[currentMoveIndex].recommended_index === idx;
+                     let cardLeft = '50%', cardTop = '28%';
+                     if (count === 3) {
+                       if (idx === 0) { cardLeft = '15%'; cardTop = '55%'; }
+                       else if (idx === 1) { cardLeft = '50%'; cardTop = '18%'; }
+                       else { cardLeft = '85%'; cardTop = '55%'; }
+                     } else if (count === 2) {
+                       cardLeft = idx === 0 ? '27%' : '73%';
+                       cardTop = '26%';
+                     }
 
-                       return (
-                         <button
-                           key={`card-${idx}`}
-                           onClick={() => handleOptionClick(opt)}
-                           disabled={isTranslating}
-                           className={cx(
-                             "absolute top-0 -translate-x-1/2 -translate-y-1/2 pointer-events-auto text-left transition-all duration-300 transform outline-none group flex flex-col items-center",
-                             isSelected ? "scale-[1.05] z-30" : "scale-100 z-10 hover:scale-105",
-                           )}
-                           style={{ left }}
-                         >
-                            {/* Recommended Badge */}
-                            {isRecommended && (
-                               <div className="bg-emerald-100 text-emerald-800 text-[10px] uppercase tracking-widest font-bold px-3 py-1 rounded-full mb-2 shadow-sm border border-emerald-200 backdrop-blur whitespace-nowrap z-20">
-                                  ☆ Recommended based on your route
-                               </div>
-                            )}
+                     const isSelected = selectedOptionInfo?.name === opt.name;
+                     const isRecommended = analysisData.moves[currentMoveIndex].recommended_index === idx;
 
-                            <div className={cx(
-                              "bg-white/95 backdrop-blur-xl border p-4 rounded-3xl flex flex-col items-center w-[230px] shadow-[0_8px_30px_rgb(0,0,0,0.12)] transition-all",
-                              isSelected ? "border-blue-500 shadow-blue-500/20 ring-4 ring-blue-500/10" : "border-slate-200/60 hover:border-slate-300 group-hover:shadow-[0_12px_40px_rgb(0,0,0,0.15)]"
-                            )}>
-                              <div className="text-center w-full">
-                                <p className={cx("text-[14.5px] font-extrabold leading-tight mb-2.5", isSelected ? "text-blue-700" : "text-slate-800")}>{opt.name}</p>
-                                
-                                <div className="pt-2.5 border-t border-slate-100 flex flex-col gap-2 w-full text-left">
-                                   {/* Situational Guide */}
-                                   <p className={cx(
-                                      "text-[12px] leading-[1.45] line-clamp-2",
-                                      isSelected ? "text-blue-800/80 font-medium" : "text-slate-500 font-normal"
-                                   )}>
-                                      {opt.description}
-                                   </p>
-                                   
-                                   {/* Back-translation (Always shown) */}
-                                   <p className={cx(
-                                      "text-[12px] font-bold leading-snug italic mt-1 line-clamp-3",
-                                      isSelected ? "text-blue-900" : "text-slate-700"
-                                   )}>
-                                      "{opt.back_translation}"
-                                   </p>
-
-                                   {/* Korean Text (Only shown after clicked, for preview clarity) */}
-                                   {isSelected && opt.korean && (
-                                     <p className="text-[11.5px] font-bold leading-[1.4] py-1.5 px-2 bg-blue-50 rounded text-blue-700 mt-1 border border-blue-100/50">
-                                        {opt.korean}
-                                     </p>
-                                   )}
-                                </div>
+                     return (
+                       <button
+                         key={`card-${idx}`}
+                         onClick={() => handleOptionClick(opt)}
+                         disabled={isTranslating}
+                         onMouseEnter={(e) => setCardTooltip({ opt, rect: e.currentTarget.getBoundingClientRect() })}
+                         onMouseLeave={() => setCardTooltip(null)}
+                         className={cx(
+                           "absolute -translate-x-1/2 -translate-y-1/2 pointer-events-auto text-left transition-all duration-200 outline-none group",
+                           isSelected ? "scale-[1.03] z-30" : "scale-100 z-10 hover:scale-[1.02]",
+                         )}
+                         style={{ left: cardLeft, top: cardTop }}
+                       >
+                          <div className={cx(
+                            "bg-white border rounded-2xl p-4 w-[210px] shadow-sm transition-all",
+                            isSelected
+                              ? "border-blue-400 shadow-[0_4px_20px_rgba(59,130,246,0.15)] ring-2 ring-blue-400/20"
+                              : "border-slate-200 group-hover:border-slate-300 group-hover:shadow-md"
+                          )}>
+                            {/* Header: arrow + title inline */}
+                            <div className="flex items-start gap-2 mb-2.5">
+                              {count === 3 && (
+                                <span className={cx("text-[17px] leading-none mt-0.5 shrink-0", isSelected ? "text-blue-500" : "text-slate-400")}>
+                                  {idx === 0 ? '←' : idx === 1 ? '↑' : '→'}
+                                </span>
+                              )}
+                              <div className="min-w-0">
+                                <p className={cx("text-[12.5px] font-bold leading-tight", isSelected ? "text-blue-700" : "text-slate-800")}>{opt.name}</p>
+                                {isRecommended && (
+                                  <span className="text-[9px] font-semibold text-emerald-600 uppercase tracking-wide">★ Recommended</span>
+                                )}
                               </div>
                             </div>
-                            
-                            {/* Pin connector dot to path */}
-                            <div className="mx-auto w-4 h-4 rounded-full bg-white border-[3px] shadow-sm transform translate-y-3 flex items-center justify-center transition-colors" style={{ borderColor: isSelected ? '#3B82F6' : '#CBD5E1'}}>
-                              {isSelected && <div className="w-1.5 h-1.5 bg-blue-500 rounded-full" />}
+
+                            <div className="flex flex-col gap-1 border-t border-slate-100 pt-2">
+                               <p className="text-[11px] leading-[1.5] line-clamp-2 text-slate-500">
+                                  {opt.description}
+                               </p>
+                               <p className={cx("text-[11px] font-medium leading-snug italic line-clamp-2", isSelected ? "text-blue-700" : "text-slate-600")}>
+                                  "{opt.back_translation}"
+                               </p>
+                               {isSelected && opt.korean && (
+                                 <p className="text-[10.5px] font-bold leading-[1.4] py-1.5 px-2 bg-blue-50 rounded-lg text-blue-700 mt-1 border border-blue-100">
+                                    {opt.korean}
+                                 </p>
+                               )}
                             </div>
-                         </button>
-                       );
-                  })}
-                </div>
+                          </div>
+
+                       </button>
+                     );
+                })}
               </div>
               
-              {/* Car Icon Tracker (Bottom Center of map path) */}
-              <div className="absolute bottom-[130px] w-14 h-14 bg-white rounded-full shadow-[0_8px_20px_rgb(0,0,0,0.2)] border-2 border-slate-100 flex items-center justify-center z-20 pointer-events-none transform -translate-x-1/2 left-1/2 ring-[6px] ring-white/50 backdrop-blur-md">
-                 {/* Navigation Puck Arrow */}
-                 <div className="w-0 h-0 border-l-[10px] border-r-[10px] border-b-[18px] border-l-transparent border-r-transparent border-b-blue-600 transform drop-shadow-sm mb-1" />
-                 {/* Glowing dot inside */}
-                 <div className="absolute top-1/2 left-1/2 -translate-x-1/2 translate-y-1 w-2 h-2 rounded-full bg-blue-300 blur-[1px]" />
+              {/* Current position puck */}
+              <div className="absolute bottom-[130px] left-1/2 -translate-x-1/2 z-20 pointer-events-none flex flex-col items-center">
+                <div className="w-10 h-10 bg-blue-600 rounded-full shadow-[0_4px_16px_rgba(59,130,246,0.5)] border-[3px] border-white flex items-center justify-center">
+                  <div className="w-0 h-0 border-l-[6px] border-r-[6px] border-b-[11px] border-l-transparent border-r-transparent border-b-white mb-0.5" />
+                </div>
+                <div className="w-3 h-3 rounded-full bg-blue-600/20 mt-[-4px]" />
               </div>
 
             </div>
