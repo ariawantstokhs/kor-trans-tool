@@ -2,10 +2,12 @@ import React, { useState, useEffect } from 'react';
 import { 
   analyzeContext, 
   translateMove, 
+  generateOptionsForMove,
   ContextAnalysisResponse, 
   MoveTranslationResponse, 
   SCENARIOS,
-  MoveOption
+  MoveOption,
+  RouteHistory
 } from './api';
 import { 
   Sparkles, IterationCw, ChevronRight, ChevronLeft, 
@@ -30,12 +32,13 @@ export function App() {
   const [currentMoveIndex, setCurrentMoveIndex] = useState(0);
   const [moveResults, setMoveResults] = useState<MoveTranslationResponse[]>([]);
   // Store the user's choices string for the route summary
-  const [routeHistory, setRouteHistory] = useState<{name: string, description: string}[]>([]); 
+  const [routeHistory, setRouteHistory] = useState<RouteHistory[]>([]); 
   
   const [selectedOptionInfo, setSelectedOptionInfo] = useState<{name: string, description?: string, customText?: string} | null>(null);
   const [previewOption, setPreviewOption] = useState<MoveOption | null>(null);
 
   const [isTranslating, setIsTranslating] = useState(false);
+  const [isGeneratingOptions, setIsGeneratingOptions] = useState(false);
   const [customMoveInstruction, setCustomMoveInstruction] = useState('');
 
   useEffect(() => {
@@ -80,10 +83,20 @@ export function App() {
         data = SCENARIOS.scenarioA.mockAnalysis as any; 
       }
       setAnalysisData(data);
+      
+      // Load options for the first move immediately
+      setIsGeneratingOptions(true);
+      const firstMoveOptions = await generateOptionsForMove(data.moves[0], data.context, []);
+      data.moves[0].options = firstMoveOptions.options;
+      data.moves[0].recommended_index = firstMoveOptions.recommended_index;
+      setAnalysisData({...data}); // trigger re-render
+      setIsGeneratingOptions(false);
+
       setPhase('ANALYSIS');
     } catch (err: any) {
       console.error(err);
       setError(err?.message || 'An error occurred during context analysis.');
+      setIsGeneratingOptions(false);
     } finally {
       setIsAnalyzing(false);
     }
@@ -140,7 +153,27 @@ export function App() {
       clearSelection();
       
       if (currentMoveIndex < analysisData.moves.length - 1) {
-        setCurrentMoveIndex(prev => prev + 1);
+        const nextMoveIndex = currentMoveIndex + 1;
+        setCurrentMoveIndex(nextMoveIndex); // Instantly show next move text
+        setIsGeneratingOptions(true);
+        
+        try {
+          const nextMoveOptions = await generateOptionsForMove(
+            analysisData.moves[nextMoveIndex], 
+            analysisData.context, 
+            newHistory,
+            toneAdjustment
+          );
+          const updatedData = { ...analysisData };
+          updatedData.moves[nextMoveIndex].options = nextMoveOptions.options;
+          updatedData.moves[nextMoveIndex].recommended_index = nextMoveOptions.recommended_index;
+          setAnalysisData(updatedData);
+        } catch (err: any) {
+          console.error(err);
+          setError(err?.message || "Failed to load route options.");
+        } finally {
+          setIsGeneratingOptions(false);
+        }
       } else {
         setPhase('ARRIVAL');
       }
@@ -318,32 +351,29 @@ export function App() {
 
             {/* Dynamic Map Area */}
             <div className={cx(
-              "absolute inset-0 flex flex-col justify-end items-center pb-[180px] transition-transform duration-1000 ease-in-out",
-              previewOption ? "translate-y-[15vh] scale-110 opacity-40 blur-[2px]" : "" // zoom into branch
+              "absolute inset-0 flex flex-col justify-end items-center pb-[180px] transition-all duration-500 ease-in-out",
+              previewOption ? "opacity-30 blur-[1px]" : ""
             )}>
               
                {/* Route Path (SVG) */}
                <div className="absolute inset-x-0 bottom-[140px] top-0 pointer-events-none flex justify-center">
-                  <svg className="w-[800px] h-full overflow-visible" viewBox="0 0 800 600" preserveAspectRatio="none">
-
-                    {/* Branches (Base outline/unselected paths first) */}
-                    {analysisData.moves[currentMoveIndex].options.map((_, idx, arr) => {
+                  <svg className="w-full max-w-[1000px] h-full overflow-visible" viewBox="0 0 1000 600" preserveAspectRatio="none">
+ 
+                    {/* Branches (unselected paths first) */}
+                    {(analysisData.moves[currentMoveIndex].options || []).map((_, idx, arr) => {
                        const count = arr.length;
-                       // Left, Center(Forward), Right
-                       let tX = 400; 
-                       if (count === 2) tX = idx === 0 ? 250 : 550;
-                       if (count === 3) tX = idx === 0 ? 150 : (idx === 1 ? 400 : 650);
+                       let tX = 500;
+                       if (count === 2) tX = idx === 0 ? 300 : 700;
+                       if (count === 3) tX = idx === 0 ? 220 : (idx === 1 ? 500 : 780);
 
                        const isSelected = selectedOptionInfo?.name === arr[idx].name;
-                       const d = `M400,360 C400,240 ${tX},280 ${tX},160`;
+                       // Junction at y=440, branch tips at y=210 (aligns with cards at top-[180px])
+                       const d = `M500,440 C500,340 ${tX},280 ${tX},210`;
 
-                       // Unselected path styling (white street with gray border, Map style)
                        if (!isSelected) {
                          return (
                            <g key={`path-unselected-${idx}`}>
-                             {/* Border casing */}
                              <path d={d} stroke="#CBD5E1" strokeWidth="26" strokeLinecap="round" fill="none" opacity="0.8" />
-                             {/* Inner street */}
                              <path d={d} stroke="#FFFFFF" strokeWidth="20" strokeLinecap="round" fill="none" />
                            </g>
                          );
@@ -351,22 +381,20 @@ export function App() {
                        return null;
                     })}
 
-                    {/* Active Route on top */}
-                    {analysisData.moves[currentMoveIndex].options.map((_, idx, arr) => {
+                    {/* Branches (selected path on top) */}
+                    {(analysisData.moves[currentMoveIndex].options || []).map((_, idx, arr) => {
                        const count = arr.length;
-                       let tX = 400;
-                       if (count === 2) tX = idx === 0 ? 250 : 550;
-                       if (count === 3) tX = idx === 0 ? 150 : (idx === 1 ? 400 : 650);
+                       let tX = 500;
+                       if (count === 2) tX = idx === 0 ? 300 : 700;
+                       if (count === 3) tX = idx === 0 ? 220 : (idx === 1 ? 500 : 780);
 
                        const isSelected = selectedOptionInfo?.name === arr[idx].name;
-                       const d = `M400,360 C400,240 ${tX},280 ${tX},160`;
+                       const d = `M500,440 C500,340 ${tX},280 ${tX},210`;
 
                        if (isSelected) {
                          return (
                            <g key={`path-selected-${idx}`} style={{ zIndex: 10 }}>
-                             {/* Halo outer glow (simplified, no shadow filter) */}
                              <path d={d} stroke="#BFDBFE" strokeWidth="36" strokeLinecap="round" fill="none" opacity="0.6" />
-                             {/* Core blue route */}
                              <path d={d} stroke="#3B82F6" strokeWidth="20" strokeLinecap="round" fill="none" />
                            </g>
                          );
@@ -374,19 +402,19 @@ export function App() {
                        return null;
                     })}
 
-                    {/* Main Stem originating from car (draw last so it covers the junction overlap) */}
+                    {/* Main Stem from car to junction */}
                     <g>
-                      <path d="M400,600 L400,300" stroke="#BFDBFE" strokeWidth="36" strokeLinecap="round" fill="none" opacity="0.6" />
-                      <path d="M400,600 L400,300" stroke="#3B82F6" strokeWidth="20" strokeLinecap="round" fill="none" />
+                      <path d="M500,600 L500,440" stroke="#BFDBFE" strokeWidth="36" strokeLinecap="round" fill="none" opacity="0.6" />
+                      <path d="M500,600 L500,440" stroke="#3B82F6" strokeWidth="20" strokeLinecap="round" fill="none" />
                     </g>
 
                     {/* Invisible Hit Areas for clicking paths directly */}
-                    {analysisData.moves[currentMoveIndex].options.map((_, idx, arr) => {
+                    {(analysisData.moves[currentMoveIndex].options || []).map((_, idx, arr) => {
                        const count = arr.length;
-                       let tX = 400;
-                       if (count === 2) tX = idx === 0 ? 250 : 550;
-                       if (count === 3) tX = idx === 0 ? 150 : (idx === 1 ? 400 : 650);
-                       const d = `M400,300 C400,200 ${tX},250 ${tX},120`;
+                       let tX = 500;
+                       if (count === 2) tX = idx === 0 ? 300 : 700;
+                       if (count === 3) tX = idx === 0 ? 220 : (idx === 1 ? 500 : 780);
+                       const d = `M500,440 C500,340 ${tX},280 ${tX},210`;
                        
                        return (
                          <path 
@@ -404,20 +432,27 @@ export function App() {
                  </svg>
               </div>
 
+              {/* Inline Loading Badge for Route Generation */}
+              {isGeneratingOptions && (
+                <div className="absolute w-full top-[180px] flex justify-center h-0 pointer-events-none px-4 box-border z-20">
+                  <div className="bg-white/90 backdrop-blur-md px-6 py-4 rounded-full shadow-[0_8px_30px_rgb(0,0,0,0.12)] border border-slate-200/60 transform -translate-y-1/2 flex items-center gap-3">
+                    <IterationCw className="w-5 h-5 text-blue-500 animate-spin" />
+                    <p className="font-bold text-slate-700 text-sm">Calculating route options based on context...</p>
+                  </div>
+                </div>
+              )}
+
               {/* Branch Cards (Apple Maps POI style) - Now wider to fit screen edges safely */}
-              <div className="absolute w-full top-[160px] flex justify-center h-0 pointer-events-none px-4 box-border">
-                <div className="w-[800px] max-w-full relative">
-                  {analysisData.moves[currentMoveIndex].options.map((opt, idx, arr) => {
+              <div className="absolute w-full top-[180px] flex justify-center h-0 pointer-events-none px-4 box-border">
+                <div className="w-full max-w-[1000px] relative">
+                  {(analysisData.moves[currentMoveIndex].options || []).map((opt, idx, arr) => {
                        const count = arr.length;
                        let left = '50%';
-                       if (count === 2) left = idx === 0 ? '31.25%' : '68.75%'; // 250/800 and 550/800
-                       if (count === 3) left = idx === 0 ? '18.75%' : (idx === 1 ? '50%' : '81.25%'); // 150/800, 400/800, 650/800
+                       if (count === 2) left = idx === 0 ? '30%' : '70%';
+                       if (count === 3) left = idx === 0 ? '22%' : (idx === 1 ? '50%' : '78%');
 
                        const isSelected = selectedOptionInfo?.name === opt.name;
-
-                       // Temporary patch for mock object translation hint until API is connected fully if it lacks 'korean' prop upfront
-                       // Assumes opt might have some small hint or we use back_translation if available.
-                       const hint = (opt as any)?.korean || (opt as any)?.back_translation || opt.description;
+                       const isRecommended = analysisData.moves[currentMoveIndex].recommended_index === idx;
 
                        return (
                          <button
@@ -425,31 +460,45 @@ export function App() {
                            onClick={() => handleOptionClick(opt)}
                            disabled={isTranslating}
                            className={cx(
-                             "absolute top-0 -translate-x-1/2 -translate-y-1/2 pointer-events-auto text-left transition-all duration-300 transform outline-none group",
-                             isSelected ? "scale-[1.10] z-30" : "scale-100 z-10 hover:scale-105",
+                             "absolute top-0 -translate-x-1/2 -translate-y-1/2 pointer-events-auto text-left transition-all duration-300 transform outline-none group flex flex-col items-center",
+                             isSelected ? "scale-[1.05] z-30" : "scale-100 z-10 hover:scale-105",
                            )}
                            style={{ left }}
                          >
+                            {/* Recommended Badge */}
+                            {isRecommended && (
+                               <div className="bg-emerald-100 text-emerald-800 text-[10px] uppercase tracking-widest font-bold px-3 py-1 rounded-full mb-2 shadow-sm border border-emerald-200 backdrop-blur whitespace-nowrap z-20">
+                                  ☆ Recommended based on your route
+                               </div>
+                            )}
+
                             <div className={cx(
-                              "bg-white/95 backdrop-blur-xl border p-4 rounded-3xl flex flex-col items-center w-[220px] shadow-[0_8px_30px_rgb(0,0,0,0.12)] transition-all",
+                              "bg-white/95 backdrop-blur-xl border p-4 rounded-3xl flex flex-col items-center w-[230px] shadow-[0_8px_30px_rgb(0,0,0,0.12)] transition-all",
                               isSelected ? "border-blue-500 shadow-blue-500/20 ring-4 ring-blue-500/10" : "border-slate-200/60 hover:border-slate-300 group-hover:shadow-[0_12px_40px_rgb(0,0,0,0.15)]"
                             )}>
                               <div className="text-center w-full">
-                                <p className={cx("text-[14px] font-extrabold leading-tight mb-2", isSelected ? "text-blue-700" : "text-slate-800")}>{opt.name}</p>
+                                <p className={cx("text-[14.5px] font-extrabold leading-tight mb-2.5", isSelected ? "text-blue-700" : "text-slate-800")}>{opt.name}</p>
                                 
-                                {/* Concrete Translation Hint */}
-                                <div className="pt-2 border-t border-slate-100 flex flex-col gap-1.5 w-full text-left">
+                                <div className="pt-2.5 border-t border-slate-100 flex flex-col gap-2 w-full text-left">
+                                   {/* Situational Guide */}
                                    <p className={cx(
-                                      "text-[12.5px] font-bold leading-snug line-clamp-3",
+                                      "text-[12px] leading-[1.45] line-clamp-2",
+                                      isSelected ? "text-blue-800/80 font-medium" : "text-slate-500 font-normal"
+                                   )}>
+                                      {opt.description}
+                                   </p>
+                                   
+                                   {/* Back-translation (Always shown) */}
+                                   <p className={cx(
+                                      "text-[12px] font-bold leading-snug italic mt-1 line-clamp-3",
                                       isSelected ? "text-blue-900" : "text-slate-700"
                                    )}>
-                                      "{opt.back_translation || opt.description}"
+                                      "{opt.back_translation}"
                                    </p>
-                                   {opt.korean && (
-                                     <p className={cx(
-                                        "text-[11.5px] font-medium leading-[1.4] line-clamp-2",
-                                        isSelected ? "text-blue-600/90" : "text-slate-500"
-                                     )}>
+
+                                   {/* Korean Text (Only shown after clicked, for preview clarity) */}
+                                   {isSelected && opt.korean && (
+                                     <p className="text-[11.5px] font-bold leading-[1.4] py-1.5 px-2 bg-blue-50 rounded text-blue-700 mt-1 border border-blue-100/50">
                                         {opt.korean}
                                      </p>
                                    )}
@@ -549,7 +598,7 @@ export function App() {
                       )}>
                         <input
                            type="text"
-                           placeholder="Route detour note..."
+                           placeholder="e.g., Make it sound more apologetic but warm..."
                            className="flex-1 bg-transparent border-none focus:ring-0 text-[13px] px-4 py-2 outline-none text-slate-800 placeholder:text-slate-400 font-medium"
                            value={customMoveInstruction}
                            onChange={(e) => {
@@ -561,6 +610,7 @@ export function App() {
                         <button
                            type="submit"
                            disabled={!customMoveInstruction.trim() || isTranslating}
+                           title="Use custom route"
                            className="w-8 h-8 rounded-full bg-slate-900 text-white flex items-center justify-center disabled:opacity-30 disabled:bg-slate-300 hover:bg-black transition-colors shrink-0"
                         >
                            <ChevronRight className="w-4 h-4" />

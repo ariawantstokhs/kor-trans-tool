@@ -24,7 +24,13 @@ export interface MoveOption {
 export interface CommunicativeMove {
   label: string;
   original_text: string;
-  options: MoveOption[];
+  options?: MoveOption[];
+  recommended_index?: number;
+}
+
+export interface RouteHistory {
+  name: string;
+  description: string;
 }
 
 export interface ContextAnalysisResponse {
@@ -143,15 +149,7 @@ export async function analyzeContext(sourceText: string, toneAdjustment?: string
   let prompt = `You are an expert English-to-Korean translator and communication coach.
 The user provides an English text.
 Read the entire text and classify its communicative structure into about 3-5 logical "moves" (e.g., Opening, Main point, Closing).
-For each move, provide 2 to 3 tone/approach options for how it could be translated into Korean.
-Do NOT use grammatical jargon like "합쇼체 vs 해요체". Use intention-level names like "Warm & personal", "Standard formal", etc.
-
-IMPORTANT: The options you provide should REMAIN INHERENT TO KOREAN LANGUAGE NUANCES. They should NOT just be repeating what is already decided in the English text. 
-For example, for "I hope this message finds you well", instead of "Warm vs Neutral", you should suggest "Wellbeing check vs Gratitude-based vs Seasonal/contextual" (which are different ways to express warmth in Korean professional writing). You must present communicative crossroads that exist in Korean.
-
-Provide a 1-sentence description in English for each option explaining WHY it matters or when to use it in Korean context, naturally (no "Why it matters" header).
-For each option provide an appropriate emoji icon (\`icon\`) that represents this choice.
-Crucially, you MUST also provide the proposed \`korean\` translation for this move, and its \`back_translation\` in English so the user can see exactly what they are choosing.
+Do NOT generate the actual Korean translations or options yet. Only output the context and the sequence of moves that make up the source text.
 
 Return JSON in this EXACT format:
 {
@@ -162,23 +160,11 @@ Return JSON in this EXACT format:
   "moves": [
     {
       "label": "Opening",
-      "original_text": "I hope this message finds you well.",
-      "options": [
-        {
-          "icon": "☀️",
-          "name": "Wellbeing Check",
-          "description": "Directly asking how they're doing — a common way to show genuine care in Korean professional emails",
-          "korean": "안녕하세요, 잘 지내고 계신지요?",
-          "back_translation": "Hello, are you doing well?"
-        },
-        {
-          "icon": "🍁",
-          "name": "Seasonal Reference",
-          "description": "Referencing the weather or season is a sophisticated way to build rapport in Korean business channels",
-          "korean": "날씨가 많이 쌀쌀해졌는데 건강 유의하고 계신지요.",
-          "back_translation": "The weather has gotten quite chilly, so I hope you are taking care of your health."
-        }
-      ]
+      "original_text": "I hope this message finds you well."
+    },
+    {
+      "label": "Main Request",
+      "original_text": "I wanted to follow up on the budget proposal I submitted last week..."
     }
   ]
 }
@@ -207,6 +193,83 @@ ${sourceText}
   const content = response.choices[0].message?.content;
   if (!content) throw new Error("No content returned");
   return JSON.parse(content) as ContextAnalysisResponse;
+}
+
+export interface OptionsGenerationResponse {
+  options: MoveOption[];
+  recommended_index?: number;
+}
+
+export async function generateOptionsForMove(
+  move: CommunicativeMove,
+  context: AnalysisContext,
+  routeHistory: RouteHistory[],
+  toneAdjustment?: string
+): Promise<OptionsGenerationResponse> {
+  const isFirstMove = routeHistory.length === 0;
+  
+  let historyContext = "";
+  if (!isFirstMove) {
+    historyContext = `
+Previous Translation Route History:
+${routeHistory.map((h, i) => `Move ${i + 1}: Chosen approach was "${h.name}" - ${h.description}`).join('\n')}
+
+Because the user has already chosen a specific communicative route above, you MUST provide a \`recommended_index\` (0, 1, or 2) pointing to the option that most naturally continues the established tone and flow.
+Do NOT force the user; all options should remain valid independent choices, but one must be recommended.`;
+  }
+
+  let prompt = `You are an expert English-to-Korean translator and communication coach.
+We are translating the text chunk by chunk. It's time to generate 2 to 3 translation options for the CURRENT MOVE.
+
+Overall Context:
+Tone: ${context.tone}
+Purpose: ${context.purpose}
+${toneAdjustment ? `User Tone Request: ${toneAdjustment}` : ''}
+${historyContext}
+
+CURRENT MOVE to translate:
+Label: ${move.label}
+Original Text: "${move.original_text}"
+
+Generate 2 to 3 tone/approach options for how it could be translated into Korean.
+Do NOT use grammatical jargon like "합쇼체 vs 해요체". Use intention-level names like "Warm & personal", "Standard formal", etc.
+
+IMPORTANT: The options you provide should REMAIN INHERENT TO KOREAN LANGUAGE NUANCES. They should NOT just be repeating what is already decided in the English text. 
+You must present communicative crossroads that exist in Korean.
+
+Provide a 1-sentence \`description\` in English for each option explaining WHY it matters or when to use it in Korean context, naturally.
+For each option provide an appropriate emoji \`icon\` that represents this choice.
+Crucially, provide the proposed \`korean\` translation for this move, and its \`back_translation\` in English so the user can see exactly what they are choosing.
+
+Return JSON in this EXACT format:
+{
+  "options": [
+    {
+      "icon": "☀️",
+      "name": "Wellbeing Check",
+      "description": "Directly asking how they're doing — a common way to show genuine care in Korean professional emails",
+      "korean": "안녕하세요, 잘 지내고 계신지요?",
+      "back_translation": "Hello, are you doing well?"
+    },
+...
+  ]${!isFirstMove ? `,\n  "recommended_index": 0` : ''}
+}
+`;
+
+  const response = await openai.chat.completions.create({
+    model: MODEL,
+    response_format: { type: 'json_object' },
+    messages: [
+      {
+        role: 'system',
+        content: prompt
+      }
+    ],
+  });
+
+  const content = response.choices[0].message?.content;
+  if (!content) throw new Error("No content returned");
+  return JSON.parse(content) as OptionsGenerationResponse;
 }
 
 export async function translateMove(
