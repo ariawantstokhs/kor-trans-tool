@@ -40,7 +40,6 @@ export function App() {
   const [isTranslating, setIsTranslating] = useState(false);
   const [isGeneratingOptions, setIsGeneratingOptions] = useState(false);
   const [customMoveInstruction, setCustomMoveInstruction] = useState('');
-  const [cardTooltip, setCardTooltip] = useState<{opt: MoveOption, rect: DOMRect} | null>(null);
 
   useEffect(() => {
     handleLoadScenario('A');
@@ -204,22 +203,6 @@ export function App() {
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col font-sans selection:bg-blue-200 overflow-x-hidden">
-      {/* Fixed card tooltip — rendered outside overflow-hidden containers */}
-      {cardTooltip && (
-        <div
-          className="fixed z-[9999] pointer-events-none w-[260px] bg-slate-900 text-white rounded-xl p-3 shadow-xl"
-          style={{
-            left: cardTooltip.rect.left + cardTooltip.rect.width / 2,
-            top: cardTooltip.rect.top - 10,
-            transform: 'translate(-50%, -100%)',
-          }}
-        >
-          <p className="text-[11px] font-bold mb-1 text-slate-300">{cardTooltip.opt.name}</p>
-          <p className="text-[11px] leading-[1.6] text-slate-200 mb-1.5">{cardTooltip.opt.description}</p>
-          <p className="text-[11px] italic text-slate-400">"{cardTooltip.opt.back_translation}"</p>
-          <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-900" />
-        </div>
-      )}
       {/* Header */}
       <header className="bg-white/80 backdrop-blur-md border-b border-slate-200 shadow-sm sticky top-0 z-30 transition-all">
         <div className="max-w-4xl mx-auto px-6 py-4 flex items-center justify-between">
@@ -260,7 +243,7 @@ export function App() {
       </header>
 
       {/* Main Content */}
-      <main className="flex-1 max-w-4xl w-full mx-auto px-6 py-12 flex flex-col items-center justify-start">
+      <main className="flex-1 max-w-6xl w-full mx-auto px-6 py-12 flex flex-col items-center justify-start">
         
         {/* Error Alert */}
         {error && (
@@ -376,7 +359,7 @@ export function App() {
               
                {/* Route connectors (minimal thin lines) */}
                <div className="absolute inset-x-0 bottom-[140px] top-0 pointer-events-none flex justify-center">
-                  <svg className="w-full max-w-[1000px] h-full" viewBox="0 0 1000 600" preserveAspectRatio="none">
+                  <svg className="w-full h-full" viewBox="0 0 1000 600" preserveAspectRatio="none">
                     {(() => {
                       const options = analysisData.moves[currentMoveIndex].options || [];
                       const count = options.length;
@@ -462,8 +445,6 @@ export function App() {
                          key={`card-${idx}`}
                          onClick={() => handleOptionClick(opt)}
                          disabled={isTranslating}
-                         onMouseEnter={(e) => setCardTooltip({ opt, rect: e.currentTarget.getBoundingClientRect() })}
-                         onMouseLeave={() => setCardTooltip(null)}
                          className={cx(
                            "absolute -translate-x-1/2 -translate-y-1/2 pointer-events-auto text-left transition-all duration-200 outline-none group",
                            isSelected ? "scale-[1.03] z-30" : "scale-100 z-10 hover:scale-[1.02]",
@@ -471,7 +452,7 @@ export function App() {
                          style={{ left: cardLeft, top: cardTop }}
                        >
                           <div className={cx(
-                            "bg-white border rounded-2xl p-4 w-[210px] shadow-sm transition-all",
+                            "bg-white border rounded-2xl p-4 w-[230px] shadow-sm transition-all",
                             isSelected
                               ? "border-blue-400 shadow-[0_4px_20px_rgba(59,130,246,0.15)] ring-2 ring-blue-400/20"
                               : "border-slate-200 group-hover:border-slate-300 group-hover:shadow-md"
@@ -491,13 +472,19 @@ export function App() {
                               </div>
                             </div>
 
-                            <div className="flex flex-col gap-1 border-t border-slate-100 pt-2">
-                               <p className="text-[11px] leading-[1.5] line-clamp-2 text-slate-500">
+                            <div className="flex flex-col gap-2 border-t border-slate-100 pt-2">
+                               <p className="text-[11px] leading-[1.5] text-slate-400">
                                   {opt.description}
                                </p>
-                               <p className={cx("text-[11px] font-medium leading-snug italic line-clamp-2", isSelected ? "text-blue-700" : "text-slate-600")}>
-                                  "{opt.back_translation}"
-                               </p>
+                               <div className={cx(
+                                 "rounded-lg px-2.5 py-2 border",
+                                 isSelected ? "bg-blue-50 border-blue-100" : "bg-slate-50 border-slate-100"
+                               )}>
+                                 <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400 block mb-0.5">EN Preview</span>
+                                 <p className={cx("text-[11px] font-medium leading-snug italic", isSelected ? "text-blue-700" : "text-slate-600")}>
+                                   "{opt.back_translation}"
+                                 </p>
+                               </div>
                                {isSelected && opt.korean && (
                                  <p className="text-[10.5px] font-bold leading-[1.4] py-1.5 px-2 bg-blue-50 rounded-lg text-blue-700 mt-1 border border-blue-100">
                                     {opt.korean}
