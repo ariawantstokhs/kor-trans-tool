@@ -24,6 +24,7 @@ export interface MoveOption {
 export interface CommunicativeMove {
   label: string;
   original_text: string;
+  adjustments?: Adjustment[];
   options?: MoveOption[];
   recommended_index?: number;
 }
@@ -31,6 +32,13 @@ export interface CommunicativeMove {
 export interface RouteHistory {
   name: string;
   description: string;
+}
+
+export interface Adjustment {
+  source_phrase: string;
+  scope: 'move' | 'phrase';
+  why: string;
+  impact: 'adapted' | 'direct';
 }
 
 export interface ContextAnalysisResponse {
@@ -49,94 +57,132 @@ export const SCENARIOS = {
     source: `I hope this message finds you well. I wanted to follow up on the budget proposal I submitted last week and check whether there have been any updates. I understand your schedule has been quite hectic, so I truly appreciate you taking the time to look into this. If any revisions are needed, I would be happy to make adjustments at your convenience. Thank you again for your continued support and guidance.`,
     mockAnalysis: {
       "context": {
-        "tone": "formal, writing to peer or senior colleague",
-        "purpose": "propose delaying the Q3 project deadline"
+        "tone": "formal, writing to a senior colleague or manager",
+        "purpose": "follow up on a budget proposal submitted the previous week"
       },
       "moves": [
         {
           "label": "Opening",
-          "original_text": "Hi Jimin,\n\nI wanted to reach out about the Q3 project timeline.",
+          "original_text": "I hope this message finds you well.",
+          "adjustments": [
+            {
+              "source_phrase": "I hope this message finds you well.",
+              "scope": "move",
+              "why": "Korean professional emails don't use wellness-check openers. The convention is to open with a formal greeting using the recipient's name and honorific title.",
+              "impact": "adapted"
+            }
+          ],
           "options": [
             {
               "icon": "☀️",
               "name": "Wellbeing check",
-              "description": "Directly asking how they're doing — a common way to show genuine care in Korean professional emails",
-              "korean": "지민 님 안녕하세요, 잘 지내고 계신지요?",
-              "back_translation": "Hello Jimin, are you doing well?"
+              "description": "Asking how they're doing — adapted to the Korean convention of using name + honorific",
+              "korean": "안녕하세요, 잘 지내고 계신지요?",
+              "back_translation": "Hello, are you doing well?"
             },
             {
               "icon": "☕",
-              "name": "Soft & conversational",
-              "description": "A warmer, polite greeting without specifically asking about health.",
-              "korean": "지민 님 안녕하세요, 그간 평안하셨는지요?",
-              "back_translation": "Hello Jimin, have you been peaceful lately?"
+              "name": "Soft formal",
+              "description": "A warmer greeting referencing recent wellbeing without a direct question",
+              "korean": "안녕하세요, 그간 평안하셨는지요?",
+              "back_translation": "Hello, have you been well lately?"
             },
             {
               "icon": "🎯",
               "name": "Standard formal",
-              "description": "A simple greeting that gets straight to the point.",
-              "korean": "지민 님 안녕하세요,",
-              "back_translation": "Hello Jimin,"
+              "description": "A minimal, professional greeting that gets straight to business",
+              "korean": "안녕하세요,",
+              "back_translation": "Hello,"
             }
           ]
         },
         {
-          "label": "Delivering Bad News",
-          "original_text": "After reviewing our current progress with the team, I think we need to push the deadline back by about two weeks. The data collection phase took longer than expected, and I want to make sure we deliver quality work rather than rushing through the analysis.",
+          "label": "Follow-up Request",
+          "original_text": "I wanted to follow up on the budget proposal I submitted last week and check whether there have been any updates.",
+          "adjustments": [
+            {
+              "source_phrase": "I wanted to follow up",
+              "scope": "phrase",
+              "why": "'Follow up' has no natural Korean equivalent and can feel like pressure when directed at a senior. Korean professional communication frames this as a humble inquiry rather than a follow-up action.",
+              "impact": "adapted"
+            }
+          ],
           "options": [
             {
-              "icon": "👥",
-              "name": "Focus on collective goal",
-              "description": "Highlights the team's consensus and factual constraints to soften the blow.",
-              "korean": "팀원들과 현재 진행 상황을 검토해 본 결과, 마감일을 약 2주 정도 늦춰야 할 것 같습니다. 데이터 수집 단계가 예상보다 오래 걸렸고, 분석을 서두르기보다는 완성도 높은 결과물을 전달해 드리고 싶기 때문입니다.",
-              "back_translation": "As a result of reviewing the current progress with the team members, it seems we will need to delay the deadline by about two weeks. It is because the data collection phase took longer than expected, and I want to deliver a highly complete outcome rather than rushing the analysis."
+              "icon": "🙏",
+              "name": "Humble inquiry",
+              "description": "Frames the follow-up as a tentative question, deferring to the senior's judgment",
+              "korean": "지난주에 제출해 드린 예산안과 관련하여 진행 상황을 여쭤봐도 될까 하여 연락드립니다.",
+              "back_translation": "I am reaching out to ask, if I may, about the progress on the budget proposal I submitted last week."
             },
             {
-              "icon": "🙇",
-              "name": "Direct & apologizing",
-              "description": "Takes more direct responsibility while apologizing for the delay. More deferential in Korean.",
-              "korean": "일정에 차질을 드려 죄송합니다만, 마감일을 2주 정도 연기해야 할 것 같습니다. 데이터 수집이 지연되어 양질의 결과를 위해서는 시간이 조금 더 필요합니다.",
-              "back_translation": "I apologize for the disruption to the schedule, but it seems we will need to postpone the deadline by about 2 weeks. Data collection has been delayed, so a little more time is needed for quality results."
+              "icon": "📋",
+              "name": "Direct & respectful",
+              "description": "States the purpose clearly while maintaining formality — appropriate if the relationship is established",
+              "korean": "지난주 제출해 드린 예산안의 검토 현황을 확인하고 싶어 연락드렸습니다.",
+              "back_translation": "I am reaching out to check on the review status of the budget proposal I submitted last week."
             }
           ]
         },
         {
-          "label": "Mitigation & Call to Action",
-          "original_text": "I know this might affect your team's planning, so I'd love to discuss how we can minimize the impact. Are you free for a quick call this week?",
+          "label": "Empathy & Appreciation",
+          "original_text": "I understand your schedule has been quite hectic, so I truly appreciate you taking the time to look into this.",
+          "adjustments": [
+            {
+              "source_phrase": "I truly appreciate you taking the time",
+              "scope": "phrase",
+              "why": "Expressing appreciation for a senior's time is expected in Korean, but the phrasing is more formal and less direct — expressing gratitude as a conditional rather than an assumption.",
+              "impact": "direct"
+            }
+          ],
           "options": [
             {
-              "icon": "🤝",
-              "name": "Accommodating & empathetic",
-              "description": "Shows deep consideration for their schedule, using traditional polite phrasing.",
-              "korean": "이로 인해 귀하 팀의 일정에도 영향을 미칠 수 있을 것 같아, 그 영향을 최소화할 방안을 논의하고 싶습니다. 이번 주 편하신 시간에 잠시 통화 가능하신지요?",
-              "back_translation": "It seems this might also affect your team's schedule, so I would like to discuss ways to minimize that impact. Are you available for a brief call at your convenience this week?"
+              "icon": "🤲",
+              "name": "Humble & conditional",
+              "description": "Frames appreciation as a hope rather than a statement, which feels more deferential in Korean",
+              "korean": "바쁘신 와중에도 살펴봐 주신다면 정말 감사하겠습니다.",
+              "back_translation": "I would be truly grateful if you could take a look despite your busy schedule."
             },
             {
-              "icon": "📅",
-              "name": "Proactive & structured",
-              "description": "Recommends a quick touchpoint to actively resolve any friction.",
-              "korean": "팀 일정에 영향을 미칠 수 있다는 점을 인지하고 있으며, 이를 해결하기 위해 이번 주에 잠시 미팅을 제안드립니다.",
-              "back_translation": "I am aware that this could affect your team's schedule, and to resolve this, I propose a brief meeting this week."
+              "icon": "✨",
+              "name": "Warm acknowledgment",
+              "description": "Acknowledges their effort warmly while keeping the tone professional",
+              "korean": "바쁘신 중에도 시간 내어 검토해 주시니 깊이 감사드립니다.",
+              "back_translation": "I am deeply grateful that you are taking time out of your busy schedule to review this."
             }
           ]
         },
         {
           "label": "Closing",
-          "original_text": "Thanks,\nAlex",
+          "original_text": "If any revisions are needed, I would be happy to make adjustments at your convenience. Thank you again for your continued support and guidance.",
+          "adjustments": [
+            {
+              "source_phrase": "I would be happy to make adjustments at your convenience.",
+              "scope": "phrase",
+              "why": "This flexibility offer is expressed more explicitly in Korean — the sender states they will act immediately upon the senior's word, rather than offering general willingness.",
+              "impact": "direct"
+            },
+            {
+              "source_phrase": "Thank you again for your continued support and guidance.",
+              "scope": "move",
+              "why": "Korean professional closings to seniors include a formal phrase expressing ongoing gratitude for the relationship, often with a seasonal or ambient well-wish rather than a direct thank-you statement.",
+              "impact": "adapted"
+            }
+          ],
           "options": [
             {
               "icon": "✒️",
-              "name": "Standard sign-off",
-              "description": "A standard polite sign-off used across most corporate communications.",
-              "korean": "감사합니다.\n알렉스 드림",
-              "back_translation": "Thank you.\nAlex"
+              "name": "Deferential close",
+              "description": "Positions the sender as fully available to act on the senior's direction — the strongest show of deference",
+              "korean": "수정이 필요한 부분이 있으시면 말씀만 해 주십시오. 바로 반영하겠습니다. 항상 이끌어 주심에 진심으로 감사드립니다.\n드림",
+              "back_translation": "If there are any parts that need revision, please just let me know. I will apply them immediately. I sincerely thank you for always guiding me.\n[Sender]"
             },
             {
-              "icon": "🍂",
-              "name": "Seasonal / Ambient",
-              "description": "Very common in Korean business to end by wishing good health or referencing the weather.",
-              "korean": "일교차가 큰데 건강 유의하시길 바랍니다. 감사합니다.\n알렉스 드림",
-              "back_translation": "The daily temperature range is large, so please take care of your health. Thank you.\nAlex"
+              "icon": "🍃",
+              "name": "Warm seasonal close",
+              "description": "Very common in Korean business writing — closes with a health wish alongside gratitude, softening the ending",
+              "korean": "수정 사항이 있으시면 편하신 때에 말씀해 주시면 즉시 반영하겠습니다. 늘 아낌없이 도와주시고 이끌어 주심에 깊이 감사드리며, 건강하게 지내시길 바랍니다.\n드림",
+              "back_translation": "If there are any revisions, please let me know at your convenience and I will apply them right away. I am deeply grateful for your generous help and guidance, and I hope you stay well.\n[Sender]"
             }
           ]
         }
@@ -146,10 +192,26 @@ export const SCENARIOS = {
 };
 
 export async function analyzeContext(sourceText: string, toneAdjustment?: string): Promise<ContextAnalysisResponse> {
-  let prompt = `You are an expert English-to-Korean translator and communication coach.
-The user provides an English text.
-Read the entire text and classify its communicative structure into about 3-5 logical "moves" (e.g., Opening, Main point, Closing).
-Do NOT generate the actual Korean translations or options yet. Only output the context and the sequence of moves that make up the source text.
+  let prompt = `You are an expert English-to-Korean translator and cross-cultural communication analyst.
+
+Read the source text and do two things simultaneously:
+
+1. Classify the text into 3–5 discrete communicative "moves" (e.g., Opening, Main Request, Mitigation, Closing).
+
+2. For each move, identify contextual adjustments — phrases or structural patterns where English communicative convention differs from Korean in a way that requires cultural adaptation beyond word-for-word translation. Consider:
+   - Opening/closing conventions (different greeting and sign-off norms)
+   - Directness (how directly requests, bad news, or disagreement are expressed)
+   - Politeness strategy (face-saving, hedging, deference to seniority)
+   - Social hierarchy (how communication adapts based on the recipient's seniority)
+   - Discourse structure (e.g., reason-before-request vs. request-before-reason)
+
+For each adjustment provide:
+- source_phrase: the exact phrase from the source text
+- scope: "move" if the whole move needs structural adaptation, "phrase" if a specific phrase is the issue
+- why: 1–2 plain-English sentences explaining the cultural gap (write for someone who doesn't speak Korean)
+- impact: "adapted" if the convention is fundamentally different and a literal translation would seem inappropriate or rude; "direct" if it's a subtle nuance and a literal translation would still convey meaning
+
+Do NOT generate Korean translations yet. Only output the context, moves, and adjustments.
 
 Return JSON in this EXACT format:
 {
@@ -160,11 +222,20 @@ Return JSON in this EXACT format:
   "moves": [
     {
       "label": "Opening",
-      "original_text": "I hope this message finds you well."
+      "original_text": "I hope this message finds you well.",
+      "adjustments": [
+        {
+          "source_phrase": "I hope this message finds you well.",
+          "scope": "move",
+          "why": "Korean professional emails don't use wellness-check openers. The convention is to open with a formal greeting using the recipient's name and honorific title.",
+          "impact": "adapted"
+        }
+      ]
     },
     {
       "label": "Main Request",
-      "original_text": "I wanted to follow up on the budget proposal I submitted last week..."
+      "original_text": "I wanted to follow up on the budget proposal...",
+      "adjustments": []
     }
   ]
 }

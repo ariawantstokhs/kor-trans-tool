@@ -1,17 +1,17 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  analyzeContext, 
-  translateMove, 
+import {
+  analyzeContext,
+  translateMove,
   generateOptionsForMove,
-  ContextAnalysisResponse, 
-  MoveTranslationResponse, 
+  ContextAnalysisResponse,
+  MoveTranslationResponse,
   SCENARIOS,
   MoveOption,
-  RouteHistory
+  RouteHistory,
 } from './api';
-import { 
+import {
   Sparkles, IterationCw, ChevronRight,
-  MessageSquare, Copy, RefreshCcw, ArrowRight, Play
+  MessageSquare, Copy, RefreshCcw, ArrowRight, Play, TriangleAlert
 } from 'lucide-react';
 import { cx } from './utils';
 import { RoadMap } from './RoadMap';
@@ -40,6 +40,7 @@ export function App() {
   const [isTranslating, setIsTranslating] = useState(false);
   const [isGeneratingOptions, setIsGeneratingOptions] = useState(false);
   const [customMoveInstruction, setCustomMoveInstruction] = useState('');
+  const [showDirectDetails, setShowDirectDetails] = useState(false);
 
   useEffect(() => {
     handleLoadScenario('A');
@@ -128,7 +129,21 @@ export function App() {
     setSelectedOptionInfo(null);
     setPreviewOption(null);
     setCustomMoveInstruction('');
+    setShowDirectDetails(false);
   };
+
+  // Auto-select first option for direct moves once options are loaded
+  useEffect(() => {
+    if (phase !== 'NAVIGATING' || !analysisData || isGeneratingOptions) return;
+    const move = analysisData.moves[currentMoveIndex];
+    if (!move.options || move.options.length === 0) return;
+    const isDirect = !move.adjustments?.some(adj => adj.impact === 'adapted');
+    if (isDirect && !selectedOptionInfo) {
+      const first = move.options[0];
+      setSelectedOptionInfo({ name: first.name, description: first.description });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentMoveIndex, phase, isGeneratingOptions, analysisData]);
 
   const handleDriveNext = async () => {
     if (!analysisData || !selectedOptionInfo) return;
@@ -198,8 +213,10 @@ export function App() {
   };
 
   const totalMoves = analysisData?.moves.length || 0;
-  // Node labels
   const nodeLabels = analysisData?.moves.map(m => m.label) || [];
+  const isCurrentMoveAdapted = phase === 'NAVIGATING' && analysisData
+    ? (analysisData.moves[currentMoveIndex]?.adjustments?.some(adj => adj.impact === 'adapted') ?? false)
+    : false;
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col font-sans selection:bg-blue-200 overflow-x-hidden">
@@ -381,14 +398,22 @@ export function App() {
                           `M500,${jY} L500,${cY}`,
                           `M500,${jY} L${rX},${jY}`,
                         ];
+                        const jFill  = isCurrentMoveAdapted ? "#F59E0B" : "#1D4ED8";
+                        const jStroke = isCurrentMoveAdapted ? "#FDE68A" : "#BFDBFE";
                         return (
                           <>
                             <Road d={`M500,600 L500,${jY}`} isMain />
                             {paths.map((d, i) => (
                               <Road key={i} d={d} selected={selectedIdx === i} />
                             ))}
-                            {/* Junction circle */}
-                            <circle cx="500" cy={jY} r="12" fill="#1D4ED8" stroke="#BFDBFE" strokeWidth="4" />
+                            {/* Junction — amber pulse ring for adapted moves */}
+                            {isCurrentMoveAdapted && (
+                              <circle cx="500" cy={jY} r="20" fill="#F59E0B" opacity="0.25">
+                                <animate attributeName="r" values="16;26;16" dur="2s" repeatCount="indefinite" />
+                                <animate attributeName="opacity" values="0.25;0;0.25" dur="2s" repeatCount="indefinite" />
+                              </circle>
+                            )}
+                            <circle cx="500" cy={jY} r="12" fill={jFill} stroke={jStroke} strokeWidth="4" />
                             <circle cx="500" cy={jY} r="5" fill="white" />
                           </>
                         );
@@ -397,6 +422,8 @@ export function App() {
                       // 2-option
                       const jY = 380, tipY = 160;
                       const tips = count === 2 ? [270, 730] : [500];
+                      const jFill  = isCurrentMoveAdapted ? "#F59E0B" : "#1D4ED8";
+                      const jStroke = isCurrentMoveAdapted ? "#FDE68A" : "#BFDBFE";
                       return (
                         <>
                           <Road d={`M500,600 L500,${jY}`} isMain />
@@ -404,13 +431,20 @@ export function App() {
                             const d = `M500,${jY} C500,${jY-80} ${tX},${tipY+60} ${tX},${tipY}`;
                             return <Road key={i} d={d} selected={selectedIdx === i} />;
                           })}
-                          <circle cx="500" cy={jY} r="12" fill="#1D4ED8" stroke="#BFDBFE" strokeWidth="4" />
+                          {isCurrentMoveAdapted && (
+                            <circle cx="500" cy={jY} r="20" fill="#F59E0B" opacity="0.25">
+                              <animate attributeName="r" values="16;26;16" dur="2s" repeatCount="indefinite" />
+                              <animate attributeName="opacity" values="0.25;0;0.25" dur="2s" repeatCount="indefinite" />
+                            </circle>
+                          )}
+                          <circle cx="500" cy={jY} r="12" fill={jFill} stroke={jStroke} strokeWidth="4" />
                           <circle cx="500" cy={jY} r="5" fill="white" />
                         </>
                       );
                     })()}
                   </svg>
                </div>
+
 
               {/* Inline Loading Badge */}
               {isGeneratingOptions && (
@@ -551,67 +585,155 @@ export function App() {
             )}
 
             {/* Bottom Navigation UI Bar (Apple Maps style) */}
-            <div className="absolute bottom-0 inset-x-0 z-40">
-              <div className="bg-white/95 backdrop-blur-xl border-t border-slate-200 p-4 md:p-6 shadow-[0_-10px_40px_rgba(0,0,0,0.05)] rounded-t-3xl">
-                 <div className="flex flex-col md:flex-row gap-4 items-center justify-between">
-                    {/* Left: Move Info */}
-                    <div className="flex items-center gap-3 w-full md:w-auto">
-                       <div className="w-12 h-12 bg-slate-900 rounded-2xl flex items-center justify-center shadow-lg shadow-slate-900/20 text-white font-bold text-lg shrink-0">
-                         {currentMoveIndex + 1}
-                       </div>
-                       <div>
-                         <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest mb-0.5">Move {currentMoveIndex + 1} of {analysisData.moves.length}</p>
-                         <p className="text-[15px] font-bold text-slate-900">{analysisData.moves[currentMoveIndex].label}</p>
-                       </div>
-                    </div>
-                    
-                    {/* Center: Instruction text */}
-                    <div className="flex-1 flex justify-center text-center px-4 w-full md:w-auto">
-                       <p className="text-[15px] font-medium text-slate-700 line-clamp-2 leading-snug">
-                         "{analysisData.moves[currentMoveIndex].original_text}"
-                       </p>
-                    </div>
-
-                    {/* Right: Custom route input */}
-                    <div className="w-full md:w-[300px] shrink-0">
-                      <form onSubmit={handleCustomSubmit} className={cx(
-                         "flex items-center bg-slate-100 rounded-full border transition-all p-1",
-                         selectedOptionInfo?.name === 'Custom override' ? "border-blue-400 bg-blue-50 ring-2 ring-blue-500/20" : "border-transparent focus-within:bg-white focus-within:border-slate-300 focus-within:shadow-sm"
-                      )}>
-                        <input
-                           type="text"
-                           placeholder="e.g., Make it sound more apologetic but warm..."
-                           className="flex-1 bg-transparent border-none focus:ring-0 text-[13px] px-4 py-2 outline-none text-slate-800 placeholder:text-slate-400 font-medium"
-                           value={customMoveInstruction}
-                           onChange={(e) => {
-                             setCustomMoveInstruction(e.target.value);
-                             if (selectedOptionInfo && selectedOptionInfo.name !== 'Custom override') clearSelection();
-                           }}
-                           disabled={isTranslating}
-                        />
-                        <button
-                           type="submit"
-                           disabled={!customMoveInstruction.trim() || isTranslating}
-                           title="Use custom route"
-                           className="w-8 h-8 rounded-full bg-slate-900 text-white flex items-center justify-center disabled:opacity-30 disabled:bg-slate-300 hover:bg-black transition-colors shrink-0"
-                        >
-                           <ChevronRight className="w-4 h-4" />
-                        </button>
-                      </form>
-                      
-                      {selectedOptionInfo?.name === 'Custom override' && customMoveInstruction.trim() && !previewOption && (
-                         <button 
-                            onClick={handleDriveNext}
-                            disabled={isTranslating}
-                            className="w-full mt-3 bg-blue-600 text-white py-2.5 rounded-xl text-[13px] font-bold shadow-md shadow-blue-500/20 flex items-center justify-center gap-2 hover:bg-blue-700 transition-colors active:scale-95"
-                         >
-                            {isTranslating ? <IterationCw className="w-4 h-4 animate-spin" /> : 'Drive Custom Route'}
-                         </button>
+            {(() => {
+              const currentMove = analysisData.moves[currentMoveIndex];
+              const isDirectMove = !currentMove.adjustments?.some(adj => adj.impact === 'adapted');
+              const adaptedAdjs = currentMove.adjustments?.filter(adj => adj.impact === 'adapted') ?? [];
+              const altOption = isDirectMove && currentMove.options && currentMove.options.length > 1
+                ? currentMove.options[1]
+                : null;
+              return (
+                <div className="absolute bottom-0 inset-x-0 z-40">
+                  {/* "See more" expansion panel — direct moves only */}
+                  {isDirectMove && showDirectDetails && (
+                    <div className="bg-slate-50/98 backdrop-blur-xl border-t border-slate-200 px-6 py-4 shadow-[0_-4px_20px_rgba(0,0,0,0.04)]">
+                      {currentMove.adjustments && currentMove.adjustments.length > 0 && (
+                        <div className="mb-3">
+                          <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-2">Why this move transfers directly</p>
+                          <div className="space-y-1.5">
+                            {currentMove.adjustments.map((adj, i) => (
+                              <div key={i} className="flex items-start gap-2">
+                                <span className="w-1.5 h-1.5 rounded-full shrink-0 mt-1.5 bg-slate-300" />
+                                <p className="text-[11px] text-slate-500 leading-snug">
+                                  {adj.scope === 'phrase' && (
+                                    <span className="font-semibold text-slate-600">"{adj.source_phrase}" — </span>
+                                  )}
+                                  {adj.why}
+                                </p>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      {altOption && (
+                        <div>
+                          <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-2">Alternative approach</p>
+                          <button
+                            onClick={() => setSelectedOptionInfo({ name: altOption.name, description: altOption.description })}
+                            className={cx(
+                              "w-full text-left px-3 py-2.5 rounded-xl border text-[12px] transition-all",
+                              selectedOptionInfo?.name === altOption.name
+                                ? "border-blue-400 bg-blue-50 text-blue-700 font-semibold"
+                                : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
+                            )}
+                          >
+                            <span className="font-semibold">{altOption.name}</span>
+                            <span className="text-slate-400 ml-1">— "{altOption.back_translation}"</span>
+                          </button>
+                        </div>
                       )}
                     </div>
-                 </div>
-              </div>
-            </div>
+                  )}
+
+                  <div className="bg-white/95 backdrop-blur-xl border-t border-slate-200 shadow-[0_-10px_40px_rgba(0,0,0,0.05)] rounded-t-3xl overflow-hidden">
+                    {/* Cultural checkpoint — top of white bar, adapted moves only */}
+                    {!isDirectMove && adaptedAdjs.length > 0 && (
+                      <div className="bg-amber-50 border-b border-amber-100 px-6 py-2.5 flex items-start gap-2">
+                        <TriangleAlert className="w-3.5 h-3.5 text-amber-500 shrink-0 mt-0.5" />
+                        <div className="flex-1 min-w-0">
+                          <span className="text-[9px] font-bold text-amber-600 uppercase tracking-widest mr-2">Cultural checkpoint</span>
+                          {adaptedAdjs.map((adj, i) => (
+                            <span key={i} className="text-[11px] text-amber-800 leading-snug">
+                              {adj.scope === 'phrase' && <span className="font-semibold">"{adj.source_phrase}" — </span>}
+                              {adj.why}{i < adaptedAdjs.length - 1 ? ' · ' : ''}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    <div className="p-4 md:p-6">
+                    <div className="flex flex-col md:flex-row gap-4 items-center justify-between">
+                      {/* Left: Move Info */}
+                      <div className="flex items-center gap-3 w-full md:w-auto">
+                        <div className="w-12 h-12 bg-slate-900 rounded-2xl flex items-center justify-center shadow-lg shadow-slate-900/20 text-white font-bold text-lg shrink-0">
+                          {currentMoveIndex + 1}
+                        </div>
+                        <div>
+                          <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest mb-0.5">Move {currentMoveIndex + 1} of {analysisData.moves.length}</p>
+                          <p className="text-[15px] font-bold text-slate-900">{currentMove.label}</p>
+                        </div>
+                      </div>
+
+                      {/* Center: Instruction text */}
+                      <div className="flex-1 flex justify-center text-center px-4 w-full md:w-auto">
+                        <p className="text-[15px] font-medium text-slate-700 line-clamp-2 leading-snug">
+                          "{currentMove.original_text}"
+                        </p>
+                      </div>
+
+                      {/* Right: adapted = custom input | direct = proceed button */}
+                      {isDirectMove ? (
+                        <div className="w-full md:w-[300px] shrink-0 flex flex-col gap-2">
+                          <button
+                            onClick={handleDriveNext}
+                            disabled={isTranslating || !selectedOptionInfo}
+                            className="w-full bg-slate-900 hover:bg-black text-white py-3 rounded-2xl text-sm font-bold shadow-lg shadow-slate-900/20 flex items-center justify-center gap-2 transition-all active:scale-95 disabled:opacity-50"
+                          >
+                            {isTranslating
+                              ? <><IterationCw className="w-4 h-4 animate-spin" /> Moving...</>
+                              : <>Proceed <ArrowRight className="w-4 h-4" /></>
+                            }
+                          </button>
+                          <button
+                            onClick={() => setShowDirectDetails(v => !v)}
+                            className="text-center text-[12px] text-slate-400 hover:text-slate-600 transition-colors underline underline-offset-2"
+                          >
+                            {showDirectDetails ? 'Hide details' : 'See more about this move'}
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="w-full md:w-[300px] shrink-0">
+                          <form onSubmit={handleCustomSubmit} className={cx(
+                            "flex items-center bg-slate-100 rounded-full border transition-all p-1",
+                            selectedOptionInfo?.name === 'Custom override' ? "border-blue-400 bg-blue-50 ring-2 ring-blue-500/20" : "border-transparent focus-within:bg-white focus-within:border-slate-300 focus-within:shadow-sm"
+                          )}>
+                            <input
+                              type="text"
+                              placeholder="e.g., Make it sound more apologetic but warm..."
+                              className="flex-1 bg-transparent border-none focus:ring-0 text-[13px] px-4 py-2 outline-none text-slate-800 placeholder:text-slate-400 font-medium"
+                              value={customMoveInstruction}
+                              onChange={(e) => {
+                                setCustomMoveInstruction(e.target.value);
+                                if (selectedOptionInfo && selectedOptionInfo.name !== 'Custom override') clearSelection();
+                              }}
+                              disabled={isTranslating}
+                            />
+                            <button
+                              type="submit"
+                              disabled={!customMoveInstruction.trim() || isTranslating}
+                              title="Use custom route"
+                              className="w-8 h-8 rounded-full bg-slate-900 text-white flex items-center justify-center disabled:opacity-30 disabled:bg-slate-300 hover:bg-black transition-colors shrink-0"
+                            >
+                              <ChevronRight className="w-4 h-4" />
+                            </button>
+                          </form>
+                          {selectedOptionInfo?.name === 'Custom override' && customMoveInstruction.trim() && !previewOption && (
+                            <button
+                              onClick={handleDriveNext}
+                              disabled={isTranslating}
+                              className="w-full mt-3 bg-blue-600 text-white py-2.5 rounded-xl text-[13px] font-bold shadow-md shadow-blue-500/20 flex items-center justify-center gap-2 hover:bg-blue-700 transition-colors active:scale-95"
+                            >
+                              {isTranslating ? <IterationCw className="w-4 h-4 animate-spin" /> : 'Drive Custom Route'}
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  </div>
+                </div>
+              );
+            })()}
 
           </div>
         )}
