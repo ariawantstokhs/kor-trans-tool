@@ -1,54 +1,55 @@
 # KorTrans Builder
 
-A research prototype for English → Korean professional translation using a **communicative-move-based, turn-by-turn navigation metaphor**.
+A research prototype for English → Korean professional translation using a **sentence-by-sentence, turn-by-turn navigation metaphor**.
 
-Instead of producing a single monolithic translation, the system decomposes the source text into discrete communicative moves (e.g., Opening, Main Request, Closing) and lets the user steer each move's tone independently — surfacing Korean-specific nuances that would be invisible in a one-shot translation.
+Instead of producing a single monolithic translation, the system splits the source text into sentences and lets the user steer each sentence's Korean expression independently — surfacing Korean-specific nuances that would be invisible in a one-shot translation.
 
-## Core Concept
-
-Standard translation tools collapse all decisions into one opaque output. This tool makes those decisions explicit by:
-
-1. Analyzing the source text's communicative structure and inferring tone/purpose.
-2. Presenting each move as a "crossroads" — 2–3 Korean translation options that differ in **Korean-specific** nuance (not just English-level variation).
-3. Assembling the final document from the user's choices, with a back-translation for each move so users can verify intent.
+Confirmed translations are passed as light background context for subsequent sentences — enough to maintain natural flow, but not enough to constrain the options.
 
 The GPS / road metaphor (routes, junctions, arrival) is the UI skin for this decision flow.
 
-## User Flow
+---
 
-### Phase 1 — Input
-User pastes English text (or loads Scenario A). Optionally adjusts tone context.
+## Workflow
 
-### Phase 2 — Context Analysis
-System calls the LLM to infer tone, purpose, and a list of 3–5 communicative moves from the source text. The first move's options are pre-fetched immediately.
+1. **Input** — User pastes English text (or loads Scenario A) and optionally adds a tone note (e.g. "this is to a peer, not a senior"). Clicks **Start Translation**.
 
-### Phase 3 — Navigation (move-by-move)
-For each move:
-- A map-style UI shows 2–3 option cards positioned as branching roads.
-- Each card shows: option name, description (why it matters in Korean), Korean preview, and back-translation.
-- User selects an option (or types a custom instruction). A confirm overlay shows the full Korean sentence before committing.
-- On confirm, the system translates that move and immediately pre-fetches options for the next. A `recommended_index` is returned for moves after the first, suggesting the option that best continues the established tone.
+2. **Sentence split** — The source text is split into sentences by punctuation regex. No LLM call yet.
 
-### Phase 4 — Arrival
-Final Korean document assembled from all move choices, shown alongside back-translations. A route summary on the right shows the chosen approach per move — each is clickable to go back and revise. Copy to clipboard to finish.
+3. **Options generation (per sentence)** — For the current sentence, one LLM call is made with:
+   - The full source text (overall context)
+   - All confirmed Korean sentences so far (soft tone context — not a constraint)
+   - The optional tone note
+
+   The AI returns **1–3 options**:
+   - **1 option** → sentence has one clear natural translation. It's auto-selected; user just clicks Proceed.
+   - **2–3 options** → sentence has a meaningful Korean-specific crossroad (politeness register, directness, hierarchy). Each option has: icon, name, description (English), Korean translation, English back-translation. A `cultural_note` explains what the crossroad is.
+
+4. **User choice** — For multi-option sentences, the map UI shows branching roads with an amber junction and a Cultural Checkpoint banner. User clicks a card to preview the Korean, then confirms. For single-option sentences, the road goes straight and Proceed is immediately available.
+
+5. **Accumulate & advance** — The confirmed Korean sentence is added to the context pool. The next sentence's options are fetched immediately (pre-fetched while the user reads the result). Repeat from step 3.
+
+6. **Arrival** — When all sentences are confirmed, the final Korean document is shown with back-translations. A Route Summary panel on the right lists the chosen approach per sentence — each entry is clickable to go back and revise that sentence. Copy to clipboard to finish.
+
+---
 
 ## LLM Pipeline
 
-Three sequential calls, each scoped to a single responsibility:
+One call per sentence, scoped to a single responsibility:
 
-| Call | Function | Input | Output |
-|------|----------|-------|--------|
-| 1 | `analyzeContext` | Full source text + optional tone override | `{ context: { tone, purpose }, moves: [{ label, original_text }] }` |
-| 2 | `generateOptionsForMove` | Single move + context + route history so far | `{ options: [{ icon, name, description, korean, back_translation }], recommended_index? }` |
-| 3 | `translateMove` | Single move + chosen option or custom instruction | `{ korean, back_translation, explanation }` |
+| Function | Input | Output |
+|----------|-------|--------|
+| `generateOptionsForSentence` | sentence + full source text + confirmed Korean so far + tone note | `{ options: [{icon, name, description, korean, back_translation}], cultural_note? }` |
 
-Call 2 is triggered per-move (pre-fetched one step ahead). Call 3 is triggered on user confirmation.
+`cultural_note` is only returned when the AI decides 2–3 options are warranted.
+
+---
 
 ## Tech Stack
 
 - **Frontend:** React 18, TypeScript
 - **Build:** Vite + `@vitejs/plugin-react-swc`
-- **AI:** OpenAI API (`gpt-4o-mini`)
+- **AI:** OpenAI API (`gpt-5-mini-2025-08-07`)
 - **Styling:** Tailwind CSS v4
 
 ## Project Structure
@@ -56,7 +57,7 @@ Call 2 is triggered per-move (pre-fetched one step ahead). Call 3 is triggered o
 ```
 src/
 ├── App.tsx          Main UI — all phases and state management
-├── api.ts           LLM calls, data types, Scenario A mock data
+├── api.ts           LLM calls, data types, sentence splitting, Scenario A
 ├── RoadMap.tsx      Progress indicator (top nav nodes)
 ├── utils.ts         cx() classname utility
 └── main.tsx         React entry point
