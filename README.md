@@ -1,74 +1,61 @@
 # KorTrans Builder
 
-A research prototype for English → Korean professional translation using a **sentence-by-sentence, turn-by-turn navigation metaphor**.
+A research prototype for English → Korean professional translation using a **dynamic, turn-by-turn navigation metaphor**.
 
-Instead of producing a single monolithic translation, the system splits the source text into sentences and lets the user steer each sentence's Korean expression independently — surfacing Korean-specific nuances that would be invisible in a one-shot translation.
+Instead of producing a single monolithic translation, the system decomposes the source text into individual sentences and allows the user to steer the Korean expression for each "turn"—surfacing cultural nuances, politeness registers, and pragmatic choices that are often flattened in standard AI translations.
 
-Confirmed translations are passed as light background context for subsequent sentences — enough to maintain natural flow, but not enough to constrain the options.
+## The Navigation Metaphor (GPS UI)
 
-The GPS / road metaphor (routes, junctions, arrival) is the UI skin for this decision flow.
+The core interaction is modeled after a **GPS / Driving experience**:
+- **Routes & Junctions**: When a sentence has multiple valid Korean expressions based on social context (e.g., deference vs. directness), the UI presents a "junction" where the user chooses their path.
+- **The Car**: A blue puck icon represents your current progress through the source text.
+- **Cultural Checkpoints**: When a meaningful cultural shift is detected (like changing a subject/object marker or choosing a specific honorific), an amber alert banner explains the "obstacle" encountered.
+- **Pragmatic Intent**: Each sentence is labeled with its core "Route" (e.g., *Action-oriented Inquiry*, *Deference-first Request*) to help non-Korean speakers understand the underlying social impact of their choice.
 
----
+## Features
 
-## Workflow
-
-1. **Input** — User pastes English text (or loads Scenario A) and optionally adds a tone note (e.g. "this is to a peer, not a senior"). Clicks **Start Translation**.
-
-2. **Sentence split** — The source text is split into sentences by punctuation regex. No LLM call yet.
-
-3. **Options generation (per sentence)** — For the current sentence, one LLM call is made with:
-   - The full source text (overall context)
-   - All confirmed Korean sentences so far (soft tone context — not a constraint)
-   - The optional tone note
-
-   The AI returns **1–3 options**:
-   - **1 option** → sentence has one clear natural translation. It's auto-selected; user just clicks Proceed.
-   - **2–3 options** → sentence has a meaningful Korean-specific crossroad (politeness register, directness, hierarchy). Each option has: icon, name, description (English), Korean translation, English back-translation. A `cultural_note` explains what the crossroad is.
-
-4. **User choice** — For multi-option sentences, the map UI shows branching roads with an amber junction and a Cultural Checkpoint banner. User clicks a card to preview the Korean, then confirms. For single-option sentences, the road goes straight and Proceed is immediately available.
-
-5. **Accumulate & advance** — The confirmed Korean sentence is added to the context pool. The next sentence's options are fetched immediately (pre-fetched while the user reads the result). Repeat from step 3.
-
-6. **Arrival** — When all sentences are confirmed, the final Korean document is shown with back-translations. A Route Summary panel on the right lists the chosen approach per sentence — each entry is clickable to go back and revise that sentence. Copy to clipboard to finish.
-
----
-
-## LLM Pipeline
-
-One call per sentence, scoped to a single responsibility:
-
-| Function | Input | Output |
-|----------|-------|--------|
-| `generateOptionsForSentence` | sentence + full source text + confirmed Korean so far + tone note | `{ options: [{icon, name, description, korean, back_translation}], cultural_note? }` |
-
-`cultural_note` is only returned when the AI decides 2–3 options are warranted.
-
----
+- **Sequential Generation**: LLM calls are made sentence-by-sentence. Each new turn is aware of previously confirmed Korean sentences to maintain logical flow and consistent tone.
+- **Scenario Testing**: Load built-in scenarios (Scenario A: Professional Budget Follow-up) or provide custom English text and tone notes.
+- **Dynamic Decision Cards**: Each option includes:
+    - **Strategy Label**: The social approach (e.g., "Warm & Personal", "Formal & Precise").
+    - **Back-translation**: A literal English translation to verify the meaning change.
+    - **Social Impact Description**: English explanation of *why* this choice matters in Korean society.
+- **Arrival & Route Summary**: Once the destination is reached, the user receives a final combined output. A "Route Summary" side-panel allows users to "rewind" to any sentence to re-navigate that specific turn.
 
 ## Tech Stack
 
-- **Frontend:** React 18, TypeScript
-- **Build:** Vite + `@vitejs/plugin-react-swc`
-- **AI:** OpenAI API (`gpt-5-mini-2025-08-07`)
-- **Styling:** Tailwind CSS v4
+- **Frontend**: React 18, TypeScript, Tailwind CSS v4
+- **Build**: Vite
+- **AI Engine**: OpenAI API (`gpt-5-mini-2025-08-07`)
+- **Icons**: Lucide-React
 
-## Project Structure
+## LLM Pipeline
 
-```
-src/
-├── App.tsx          Main UI — all phases and state management
-├── api.ts           LLM calls, data types, sentence splitting, Scenario A
-├── RoadMap.tsx      Progress indicator (top nav nodes)
-├── utils.ts         cx() classname utility
-└── main.tsx         React entry point
-```
+The system uses a focused `generateOptionsForSentence` function:
 
-## Setup
+| Component | Responsibility |
+|-----------|----------------|
+| **Input Context** | Target sentence, full source text, user's global tone note, and all previously confirmed Korean sentences. |
+| **Analysis** | Identifies "Pragmatic Intent" and determines if cultural nuances warrant multiple options. |
+| **Output** | A structured JSON containing 1–3 options with icons, strategy names, back-translations, and cultural notes. |
 
-```
-# Prerequisites: Node 18+, OpenAI API key
-echo "VITE_OPENAI_API_KEY=sk-..." > .env
+## Getting Started
 
-npm install
-npm run dev
-```
+1. **Environment Setup**:
+   ```bash
+   # Add your OpenAI API key to .env
+   echo "VITE_OPENAI_API_KEY=sk-your-key-here" > .env
+   ```
+
+2. **Installation**:
+   ```bash
+   npm install
+   ```
+
+3. **Development Build**:
+   ```bash
+   npm run dev
+   ```
+
+---
+*Created for research exploring "Low UI" and interactive transparency in AI-assisted translation.*
