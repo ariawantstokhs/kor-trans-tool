@@ -8,202 +8,243 @@ const openai = new OpenAI({
 
 const MODEL = 'gpt-4o';
 
+// ─── Language config ───
+
+export interface LanguageConfig {
+  code: string;
+  label: string;
+  contextNote: string;
+}
+
+export const LANGUAGES: Record<string, LanguageConfig> = {
+  ko: {
+    code: 'ko',
+    label: '한국어 (Korean)',
+    contextNote: 'Korean',
+  },
+  'es-MX': {
+    code: 'es-MX',
+    label: 'Español - México (Spanish)',
+    contextNote: 'Mexican Spanish',
+  },
+  zh: {
+    code: 'zh',
+    label: '中文 (Chinese)',
+    contextNote: 'Chinese',
+  },
+};
+
 // ─── Types ───
 
-export type SegmentType = 'direct' | 'transformed' | 'added' | 'removed';
+export type SegmentType = 'direct' | 'transformed' | 'cultural_adjustment' | 'added' | 'removed';
+
+export type DirectionTag =
+  | 'explicit → implicit'
+  | 'direct → indirect'
+  | 'personal → situational'
+  | 'added context'
+  | 'removed context';
 
 export interface Segment {
-  korean: string;
+  translated: string;
   type: SegmentType;
   original_english: string | null;
   why: string | null;
   back_translation: string;
+  direction_tag?: DirectionTag;
 }
 
 export interface TranslateResponse {
-  full_korean: string;
+  full_translated: string;
   segments: Segment[];
 }
 
 export interface Alternative {
-  korean: string;
+  translated: string;
   back_translation: string;
-  explicitness: 'more explicit (closer to English style)' | 'conventional Korean' | 'middle ground';
+  explicitness: string;
 }
 
 export interface AlternativesResponse {
-  alternatives: Record<number, Alternative[]>; // keyed by segment index
+  alternatives: Record<number, Alternative[]>;
 }
 
 // ─── Preset scenario ───
 
 export const SCENARIOS = {
-  scenarioA: {
-    source: `I hope this message finds you well. I wanted to follow up on the budget proposal I submitted last week and check whether there have been any updates. I understand your schedule has been quite hectic, so I truly appreciate you taking the time to look into this. If any revisions are needed, I would be happy to make adjustments at your convenience. Thank you again for your continued support and guidance.`,
-    context: {
-      recipient: 'Professor Kim',
-      relationship: 'student to professor',
-      situation: 'Following up on a budget proposal for a research project',
-    },
+  short: {
+    source: `Hi Professor Kim,
+I hope this message finds you well. I wanted to follow up on the budget proposal I submitted last week and check whether there have been any updates. I understand your schedule has been quite hectic, so I truly appreciate you taking the time to look into this. If any revisions are needed, I would be happy to make adjustments at your convenience. Thank you again for your continued support and guidance.`,
+  },
+  long: {
+    source: `Hi Professor Kim,
+I hope you're doing well. I wanted to reach out about our meeting scheduled for this Thursday.
+To be honest, I haven't made as much progress on the project as I was hoping to. I ran into some unexpected issues with the data collection — specifically, several of the survey responses came back incomplete, and I've been spending the past few days trying to figure out whether to re-recruit participants or work with what I have. I'm leaning toward re-recruiting, but I wanted to get your input before making that call.
+Because of this, I don't feel like I have enough to present at our Thursday meeting. Would it be okay if we pushed it to early next week instead? That way I can come prepared with a clearer picture of where things stand and a concrete plan for the next steps.
+I also wanted to mention that I've been reading through the two papers you recommended last time — the one by Park et al. and the Yamamoto study. I found some interesting connections to our framing, especially around how Park et al. handle the cultural adaptation piece. I'd love to discuss that when we do meet.
+I'm sorry about the delay — I know your schedule is tight and I don't want to waste your time. I'll make sure to send you a brief summary of where I am by Wednesday so you're not going in blind when we do meet.
+Thanks so much for being flexible about this. I really appreciate it.
+Best,
+Alex`,
   },
 };
 
-// ─── Call 1: Translate + Annotate ───
+// ─── Call 1: Translate ───
 
-export async function translateAndAnnotate(
+export async function translate(
   englishText: string,
-  recipient: string,
-  relationship: string,
-  situation: string
-): Promise<TranslateResponse> {
-  const prompt = `You are an expert English-to-Korean translator specializing in pragmatic and cultural adaptation.
+  lang: LanguageConfig = LANGUAGES.ko
+): Promise<string> {
+  const targetLang = lang.contextNote;
 
-[Source Email]
-"""
-${englishText}
-"""
+  const prompt = `Translate this English email into ${targetLang}.
+Translate naturally and appropriately based on the content and context of the email.
+Output only the translation.
 
-[Context]
-- Recipient: ${recipient}
-- Relationship: ${relationship}
-- Situation: ${situation}
-
-### Task:
-Translate the email into natural Korean. Then break the translation into segments and annotate each segment with one of these types:
-- "direct": meaning and delivery style are nearly identical to the original
-- "transformed": same intent, but delivered differently due to Korean conventions
-- "added": not in the original, but added because Korean conventions expect it
-- "removed": present in the original, but omitted because it would be unnatural in Korean
-
-For each segment:
-- "korean": the Korean text of this segment (for "removed" segments, leave empty string)
-- "type": one of the four types above
-- "original_english": the corresponding English phrase (null for "added" segments)
-- "why": for non-direct segments, explain in English: "In English, [X], but in Korean, [Y] because [reason]." Null for "direct" segments.
-- "back_translation": a literal English back-translation of the Korean text (for "removed" segments, write what was removed from the original)
-
-Return ONLY a JSON object:
-{
-  "full_korean": "the complete Korean translation as a single string",
-  "segments": [ ... ]
-}`;
+${englishText}`;
 
   const response = await openai.chat.completions.create({
     model: MODEL,
-    response_format: { type: 'json_object' },
-    messages: [{ role: 'system', content: prompt }],
+    messages: [{ role: 'user', content: prompt }],
   });
 
   const content = response.choices[0].message?.content;
   if (!content) throw new Error('No content returned from Call 1');
-  return JSON.parse(content) as TranslateResponse;
+  return content.trim();
 }
 
-// ─── Call 2: Back-translate ───
+// ─── Call 2: Analyze ───
 
-export async function backTranslate(
-  segments: Segment[]
-): Promise<Segment[]> {
-  const koreanSegments = segments
-    .filter(s => s.type !== 'removed')
-    .map((s, i) => ({ index: i, korean: s.korean }));
+export async function analyze(
+  englishText: string,
+  translation: string,
+  lang: LanguageConfig = LANGUAGES.ko
+): Promise<TranslateResponse> {
+  const targetLang = lang.contextNote;
 
-  const prompt = `You are a Korean-to-English literal translator.
+  const prompt = `Here is an English email and its ${targetLang} translation.
 
-Below are Korean text segments. For each one, provide a literal, word-for-word English back-translation that preserves the Korean sentence structure and nuance as closely as possible. Do NOT polish or naturalize the English — the goal is to show English speakers exactly what the Korean says.
+Original:
+${englishText}
 
-Segments:
-${JSON.stringify(koreanSegments, null, 2)}
+Translation:
+${translation}
 
-Return ONLY a JSON object:
+Segment the translation and compare each segment against the original. For each segment, provide a JSON array:
+
 {
-  "back_translations": {
-    "0": "literal back-translation for segment 0",
-    "1": "literal back-translation for segment 1",
-    ...
-  }
-}`;
+  "segments": [
+    {
+      "translated_text": "...",
+      "type": "direct | transformed | cultural_adjustment | added | removed",
+      "original_english": "..." or null if added,
+      "back_translation": "natural fluent English preserving the tone and nuance of the translated text",
+      "why": "(non-direct only) what you changed and why. Be specific to this sentence. Explain what a native reader would feel. Never use terms like high-context, low-context, collectivist, individualist."
+    }
+  ]
+}
+
+Type definitions:
+- direct: Meaning and delivery essentially the same.
+- transformed: Same meaning, form changed due to grammar (word order, honorifics, verb endings).
+- cultural_adjustment: Communicative strategy changed — how the message is delivered is fundamentally different (direct became hedged, personal became situational, tone shifted beyond grammar, etc).
+- added: Not in original, added for convention.
+- removed: In original, dropped as unnatural or redundant. translated_text should be empty, original_english should contain what was dropped.`;
 
   const response = await openai.chat.completions.create({
     model: MODEL,
     response_format: { type: 'json_object' },
-    messages: [{ role: 'system', content: prompt }],
+    messages: [{ role: 'user', content: prompt }],
   });
 
   const content = response.choices[0].message?.content;
   if (!content) throw new Error('No content returned from Call 2');
-  const parsed = JSON.parse(content) as { back_translations: Record<string, string> };
+  const raw = JSON.parse(content);
 
-  let koreanIdx = 0;
-  return segments.map(seg => {
-    if (seg.type === 'removed') return seg;
-    const bt = parsed.back_translations[String(koreanIdx)] ?? seg.back_translation;
-    koreanIdx++;
-    return { ...seg, back_translation: bt };
-  });
+  return {
+    full_translated: translation,
+    segments: (raw.segments || []).map((s: any) => ({
+      translated: s.translated_text || '',
+      type: s.type,
+      original_english: s.original_english || null,
+      back_translation: s.back_translation || '',
+      why: s.why || null,
+    })),
+  } as TranslateResponse;
 }
 
-// ─── Call 3: Generate Alternatives ───
+// ─── Call 3: Alternatives + Tags ───
 
-export async function generateAlternatives(
+export async function alternativesAndTags(
   segments: Segment[],
-  englishText: string,
-  recipient: string,
-  relationship: string,
-  situation: string
-): Promise<AlternativesResponse> {
-  const nonDirectSegments = segments
+  lang: LanguageConfig = LANGUAGES.ko
+): Promise<{ tags: Record<string, DirectionTag>; alternatives: Record<number, Alternative[]> }> {
+  const targetLang = lang.contextNote;
+  const caSegments = segments
     .map((s, i) => ({ ...s, originalIndex: i }))
-    .filter(s => s.type !== 'direct');
+    .filter(s => s.type === 'cultural_adjustment');
 
-  if (nonDirectSegments.length === 0) {
-    return { alternatives: {} };
+  if (caSegments.length === 0) {
+    return { tags: {}, alternatives: {} };
   }
 
-  const prompt = `You are an expert English-to-Korean translator.
+  const inputSegments = caSegments.map(s => ({
+    index: s.originalIndex,
+    translated_text: s.translated,
+    original_english: s.original_english,
+    back_translation: s.back_translation,
+    why: s.why,
+  }));
 
-[Original English Email]
-"""
-${englishText}
-"""
+  const prompt = `Here are the cultural adjustment segments from a translation.
 
-[Context]
-- Recipient: ${recipient}
-- Relationship: ${relationship}
-- Situation: ${situation}
+For each segment, provide:
+1. direction_tag: exactly one of: "explicit → implicit", "direct → indirect", "personal → situational", "added context", "removed context"
+2. alternatives: 3 options with back_translation for each:
+   - "more explicit": closer to the original English style
+   - "middle ground": balanced
+   - "conventional": natural for ${targetLang}
 
-For each of the following non-direct translation segments, generate 2-3 alternative Korean translations. Each alternative should have:
-- "korean": the alternative Korean text
-- "back_translation": literal English back-translation
-- "explicitness": one of "more explicit (closer to English style)", "conventional Korean", or "middle ground"
+Input segments:
+${JSON.stringify(inputSegments, null, 2)}
 
-Segments to generate alternatives for:
-${JSON.stringify(nonDirectSegments.map(s => ({
-  index: s.originalIndex,
-  type: s.type,
-  current_korean: s.korean,
-  original_english: s.original_english,
-  why: s.why,
-})), null, 2)}
-
-Return ONLY a JSON object:
+Respond as a JSON object:
 {
-  "alternatives": {
-    "<segment_index>": [
-      { "korean": "...", "back_translation": "...", "explicitness": "..." },
-      ...
-    ],
-    ...
-  }
+  "results": [
+    {
+      "index": <segment_index>,
+      "direction_tag": "...",
+      "alternatives": [
+        { "translated": "...", "back_translation": "...", "explicitness": "more explicit" },
+        { "translated": "...", "back_translation": "...", "explicitness": "middle ground" },
+        { "translated": "...", "back_translation": "...", "explicitness": "conventional ${targetLang}" }
+      ]
+    }
+  ]
 }`;
 
   const response = await openai.chat.completions.create({
     model: MODEL,
     response_format: { type: 'json_object' },
-    messages: [{ role: 'system', content: prompt }],
+    messages: [{ role: 'user', content: prompt }],
   });
 
   const content = response.choices[0].message?.content;
   if (!content) throw new Error('No content returned from Call 3');
-  return JSON.parse(content) as AlternativesResponse;
+  const raw = JSON.parse(content);
+
+  const tags: Record<string, DirectionTag> = {};
+  const alternatives: Record<number, Alternative[]> = {};
+
+  for (const item of raw.results || []) {
+    const idx = item.index;
+    tags[String(idx)] = item.direction_tag as DirectionTag;
+    alternatives[idx] = (item.alternatives || []).map((a: any) => ({
+      translated: a.translated || '',
+      back_translation: a.back_translation || '',
+      explicitness: a.explicitness || '',
+    }));
+  }
+
+  return { tags, alternatives };
 }
